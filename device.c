@@ -526,7 +526,7 @@ void device_client_process(int device_id, struct mux_client *client, short event
 				return;
 			}
 		}else if(conn->dev->usbdev.type == USB_ANDROID){
-			res = send_aoa(conn,  conn->ob_buf, size);
+			res = send_aoa(conn, conn->ob_buf, size);
 			if(res < 0) {
 				connection_teardown(conn);
 				return;

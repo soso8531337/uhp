@@ -67,6 +67,14 @@
 #define AOA_SET_HID_REPORT_DESC		56
 #define AOA_SEND_HID_EVENT		57
 #define AOA_AUDIO_SUPPORT		58
+/* String IDs */
+#define AOA_STRING_MAN_ID		0
+#define AOA_STRING_MOD_ID		1
+#define AOA_STRING_DSC_ID		2
+#define AOA_STRING_VER_ID		3
+#define AOA_STRING_URL_ID		4
+#define AOA_STRING_SER_ID		5
+
 
 #define AOA_TCP_PORT				0xFF
 

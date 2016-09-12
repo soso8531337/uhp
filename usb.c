@@ -75,7 +75,16 @@ struct accessory_t {
 	char *version;
 	char *url;
 	char *serial;
-} accessory_t;
+};
+static struct accessory_t acc_default = {
+	.manufacturer = "i4season",
+	.model = "DemoKit",
+	.description = "Demo ABS2013",
+	.version = "2.0",
+	.url = "https://www.i4season.com",
+	.serial = "0000000012345678",
+};
+
 
 static struct collection device_list;
 
@@ -256,7 +265,7 @@ int usb_send_aoa(struct mux_connection *conn, const unsigned char *buf, int leng
 	
 	struct usb_device *dev = conn->dev;
 	struct libusb_transfer *xfer = libusb_alloc_transfer(0);
-	libusb_fill_bulk_transfer(xfer, dev->dev, dev->ep_out, (void*)buf, length, tx_callback, conn, 0);
+	libusb_fill_bulk_transfer(xfer, dev->dev, dev->ep_out, (void*)buf, length, tx_callback_aoa, conn, 0);
 	if((res = libusb_submit_transfer(xfer)) < 0) {
 		usbmuxd_log(LL_ERROR, "Failed to submit TX transfer %p len %d to device %d-%d: %d", buf, length, dev->bus, dev->address, res);
 		libusb_free_transfer(xfer);
@@ -350,9 +359,12 @@ static int start_rx_loop(struct usb_device *dev)
 
 static int usb_switch_aoa(libusb_device* dev)
 {
-	int res, j;
+	int res=-1, j;
 	libusb_device_handle *handle;
 	struct libusb_config_descriptor *config;
+	uint8_t version[2];
+	uint8_t bus = libusb_get_bus_number(dev);
+	uint8_t address = libusb_get_device_address(dev);
 
 	// potentially blocking operations follow; they will only run when new devices are detected, which is acceptable
 	if((res = libusb_open(dev, &handle)) != 0) {
@@ -371,13 +383,127 @@ static int usb_switch_aoa(libusb_device* dev)
 			   intf->bInterfaceSubClass != INTERFACE_SUBCLASS_AOA){
 			continue;
 		}
-		if(intf->bNumEndpoints != 2) {
-			usbmuxd_log(LL_WARNING, "Endpoint count mismatch for interface %d of device %d-%d", intf->bInterfaceNumber, bus, address);
-			continue;
+		/* Now asking if device supports Android Open Accessory protocol */
+		res = libusb_control_transfer(handle,
+					      LIBUSB_ENDPOINT_IN |
+					      LIBUSB_REQUEST_TYPE_VENDOR,
+					      AOA_GET_PROTOCOL, 0, 0, version,
+					      sizeof(version), 0);
+		if (res < 0) {
+			usbmuxd_log(LL_WARNING, "Could not getting AOA protocol %d-%d: %d", bus, address, res);
+			libusb_close(handle);
+			return res;
+		}else{
+			acc_default.aoa_version = ((version[1] << 8) | version[0]);
+			usbmuxd_log(LL_WARNING, "Device[%d-%d] supports AOA %d.0!", bus, address, acc_default.aoa_version);
 		}
-		/*Now Try To Switch AOA Mode*/
+		/* In case of a no_app accessory, the version must be >= 2 */
+		if((acc_default.aoa_version < 2) && !acc_default.manufacturer) {
+			usbmuxd_log(LL_WARNING, "Connecting without an Android App only for AOA 2.0[%d-%d]", bus,address);
+			libusb_close(handle);
+			return -1;
+		}
+		if(acc_default.manufacturer) {
+			usbmuxd_log(LL_WARNING, "sending manufacturer: %s\n", acc_default.manufacturer);
+			res = libusb_control_transfer(handle,
+						  LIBUSB_ENDPOINT_OUT
+						  | LIBUSB_REQUEST_TYPE_VENDOR,
+						  AOA_SEND_IDENT, 0,
+						  AOA_STRING_MAN_ID,
+						  (uint8_t *)acc_default.manufacturer,
+						  strlen(acc_default.manufacturer) + 1, 0);
+			if(res < 0){
+				usbmuxd_log(LL_WARNING, "Could not Set AOA manufacturer %d-%d: %d", bus, address, res);
+				libusb_close(handle);
+				return res;
+			}
+		}
+		if(acc_default.model) {
+			usbmuxd_log(LL_WARNING, "sending model: %s\n", acc_default.model);
+			res = libusb_control_transfer(handle,
+						  LIBUSB_ENDPOINT_OUT
+						  | LIBUSB_REQUEST_TYPE_VENDOR,
+						  AOA_SEND_IDENT, 0,
+						  AOA_STRING_MOD_ID,
+						  (uint8_t *)acc_default.model,
+						  strlen(acc_default.model) + 1, 0);
+			if(res < 0){
+				usbmuxd_log(LL_WARNING, "Could not Set AOA model %d-%d: %d", bus, address, res);
+				libusb_close(handle);
+				return res;
+			}
+		}
 		
+		usbmuxd_log(LL_WARNING, "sending description: %s\n", acc_default.description);
+		res = libusb_control_transfer(handle,
+					  LIBUSB_ENDPOINT_OUT
+					  | LIBUSB_REQUEST_TYPE_VENDOR,
+					  AOA_SEND_IDENT, 0,
+					  AOA_STRING_DSC_ID,
+					  (uint8_t *)acc_default.description,
+					  strlen(acc_default.description) + 1, 0);
+		if(res < 0){
+			usbmuxd_log(LL_WARNING, "Could not Set AOA description %d-%d: %d", bus, address, res);
+			libusb_close(handle);
+			return res;
+		}
+		usbmuxd_log(LL_WARNING, "sending version string: %s\n", acc_default.version);
+		res = libusb_control_transfer(handle,
+					  LIBUSB_ENDPOINT_OUT
+					  | LIBUSB_REQUEST_TYPE_VENDOR,
+					  AOA_SEND_IDENT, 0,
+					  AOA_STRING_VER_ID,
+					  (uint8_t *)acc_default.version,
+					  strlen(acc_default.version) + 1, 0);
+		if(res < 0){
+			usbmuxd_log(LL_WARNING, "Could not Set AOA version %d-%d: %d", bus, address, res);
+			libusb_close(handle);
+			return res;
+		}
+		usbmuxd_log(LL_WARNING, "sending url string: %s\n", acc_default.url);
+		res = libusb_control_transfer(handle,
+					  LIBUSB_ENDPOINT_OUT
+					  | LIBUSB_REQUEST_TYPE_VENDOR,
+					  AOA_SEND_IDENT, 0,
+					  AOA_STRING_URL_ID,
+					  (uint8_t *)acc_default.url,
+					  strlen(acc_default.url) + 1, 0);
+		if(res < 0){
+			usbmuxd_log(LL_WARNING, "Could not Set AOA url %d-%d: %d", bus, address, res);
+			libusb_close(handle);
+			return res;
+		}
+		usbmuxd_log(LL_WARNING, "sending serial number: %s\n", acc_default.serial);
+		res = libusb_control_transfer(handle,
+					  LIBUSB_ENDPOINT_OUT
+					  | LIBUSB_REQUEST_TYPE_VENDOR,
+					  AOA_SEND_IDENT, 0,
+					  AOA_STRING_SER_ID,
+					  (uint8_t *)acc_default.serial,
+					  strlen(acc_default.serial) + 1, 0);
+		if(res < 0){
+			usbmuxd_log(LL_WARNING, "Could not Set AOA serial %d-%d: %d", bus, address, res);
+			libusb_close(handle);
+			return res;
+		}
+		res = libusb_control_transfer(handle,
+					  LIBUSB_ENDPOINT_OUT |
+					  LIBUSB_REQUEST_TYPE_VENDOR,
+					  AOA_START_ACCESSORY, 0, 0, NULL, 0, 0);
+		if(res < 0){
+			usbmuxd_log(LL_WARNING, "Could not Start AOA %d-%d: %d", bus, address, res);
+			libusb_close(handle);
+			return res;
+		}
+		usbmuxd_log(LL_WARNING, "Turning the device %d-%d in Accessory mode Successful", bus, address);
+		libusb_close(handle);
+		return 0;
 	}	
+	
+	libusb_close(handle);
+	usbmuxd_log(LL_WARNING, "No Found Android Device in %d-%d", bus, address);
+
+	return -1;
 }
 
 static int usb_device_add(libusb_device* dev)
