@@ -389,6 +389,8 @@ static int client_command(struct mux_client *client, struct usbmuxd_header *hdr)
 				client->state = CLIENT_CONNECTING1;
 			}
 			return 0;
+		case MESSAGE_DEVICE_LIST:
+			
 		default:
 			usbmuxd_log(LL_ERROR, "Client %d invalid command %d", client->fd, hdr->message);
 			if(send_result(client, hdr->tag, RESULT_BADCOMMAND) < 0)

@@ -55,6 +55,7 @@ enum usbmuxd_msgtype {
 	//???
 	//???
 	MESSAGE_PLIST = 8,
+	MESSAGE_DEVICE_LIST = 9,
 };
 
 struct usbmuxd_header {
@@ -87,6 +88,8 @@ struct usbmuxd_device_record {
 	uint16_t padding;
 	uint32_t location;
 } __attribute__((__packed__));
+
+#define USBHOST_DPADDING_MAGIC		0xFF
 
 #ifdef __cplusplus
 }
