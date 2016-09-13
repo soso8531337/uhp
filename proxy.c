@@ -77,27 +77,31 @@
 struct app_client{
 	struct usbmuxd_device_record devinfo;
 	int connected;
+	int commufd; /*Comunication socket fd*/
+	unsigned char *ib_buf;
+	uint32_t ib_size;
+	uint32_t ib_capacity;
+	unsigned char *ob_buf;
+	uint32_t ob_size;
+	uint32_t ob_capacity;
+	short events;	
 };
 
+struct app_config{
+	struct collection *device;
+	int listenfd;
+	pthread_t monitor;
+};
+
+enum app_state{
+	APP_NOCONNECT = 0,
+	APP_CONNECTED,	// connected
+	APP_DEAD
+}
 pthread_mutex_t device_list_mutex;
 static struct collection device_list;
-static usbmuxd_event_cb_t event_cb = NULL;
-
+static struct app_config app_proxy;
 static volatile int use_tag = 0;
-
-/**
- * Finds a device info record by its handle.
- * if the record is not found, NULL is returned.
- */
-static usbmuxd_device_info_t *devices_find(uint32_t handle)
-{
-	FOREACH(usbmuxd_device_info_t *dev, &devices) {
-		if (dev && dev->handle == handle) {
-			return dev;
-		}
-	} ENDFOREACH
-	return NULL;
-}
 
 /**
  * Creates a socket connection to usbmuxd.
@@ -111,47 +115,6 @@ static int connect_usbmuxd_socket()
 #else
 	return socket_connect_unix(USBMUXD_SOCKET_FILE);
 #endif
-}
-
-static struct usbmuxd_device_record* device_record_from_plist(plist_t props)
-{
-	struct usbmuxd_device_record* dev = NULL;
-	plist_t n = NULL;
-	uint64_t val = 0;
-	char *strval = NULL;
-
-	dev = (struct usbmuxd_device_record*)malloc(sizeof(struct usbmuxd_device_record));
-	if (!dev)
-		return NULL;
-	memset(dev, 0, sizeof(struct usbmuxd_device_record));
-
-	n = plist_dict_get_item(props, "DeviceID");
-	if (n && plist_get_node_type(n) == PLIST_UINT) {
-		plist_get_uint_val(n, &val);
-		dev->device_id = (uint32_t)val;
-	}
-
-	n = plist_dict_get_item(props, "ProductID");
-	if (n && plist_get_node_type(n) == PLIST_UINT) {
-		plist_get_uint_val(n, &val);
-		dev->product_id = (uint32_t)val;
-	}
-
-	n = plist_dict_get_item(props, "SerialNumber");
-	if (n && plist_get_node_type(n) == PLIST_STRING) {
-		plist_get_string_val(n, &strval);
-		if (strval) {
-			strncpy(dev->serial_number, strval, 255);
-			free(strval);
-		}
-	}
-	n = plist_dict_get_item(props, "LocationID");
-	if (n && plist_get_node_type(n) == PLIST_UINT) {
-		plist_get_uint_val(n, &val);
-		dev->location = (uint32_t)val;
-	}
-
-	return dev;
 }
 
 static int receive_packet(int sfd, struct usbmuxd_header *header, void **payload, int timeout)
@@ -309,31 +272,10 @@ static int send_binary_devlist_packet(int sfd, uint32_t tag)
 	return  send_packet(sfd, MESSAGE_DEVICE_LIST, tag, NULL, 0);
 }
 
-static plist_t create_plist_message(const char* message_type)
-{
-	plist_t plist = plist_new_dict();
-	plist_dict_set_item(plist, "BundleID", plist_new_string(PLIST_BUNDLE_ID));
-	plist_dict_set_item(plist, "ClientVersionString", plist_new_string(PLIST_CLIENT_VERSION_STRING));
-	plist_dict_set_item(plist, "MessageType", plist_new_string(message_type));
-	plist_dict_set_item(plist, "ProgName", plist_new_string(PLIST_PROGNAME));	
-	plist_dict_set_item(plist, "kLibUSBMuxVersion", plist_new_uint(PLIST_LIBUSBMUX_VERSION));
-	return plist;
-}
-
 static int send_listen_packet(int sfd, uint32_t tag)
 {
-	int res = 0;
-	if (proto_version == 1) {
-		/* construct message plist */
-		plist_t plist = create_plist_message("Listen");
-
-		res = send_plist_packet(sfd, tag, plist);
-		plist_free(plist);
-	} else {
-		/* binary packet */
-		res = send_packet(sfd, MESSAGE_LISTEN, tag, NULL, 0);
-	}
-	return res;
+	/* binary packet */
+	return send_packet(sfd, MESSAGE_LISTEN, tag, NULL, 0);
 }
 
 static int send_connect_packet(int sfd, uint32_t tag, uint32_t device_id, uint16_t port)
@@ -351,370 +293,7 @@ static int send_connect_packet(int sfd, uint32_t tag, uint32_t device_id, uint16
 	return send_packet(sfd, MESSAGE_CONNECT, tag, &conninfo, sizeof(conninfo));
 }
 
-static int send_read_buid_packet(int sfd, uint32_t tag)
-{
-	int res = -1;
-
-	/* construct message plist */
-	plist_t plist = create_plist_message("ReadBUID");
-
-	res = send_plist_packet(sfd, tag, plist);
-	plist_free(plist);
-
-	return res;
-}
-
-static int send_pair_record_packet(int sfd, uint32_t tag, const char* msgtype, const char* pair_record_id, plist_t data)
-{
-	int res = -1;
-
-	/* construct message plist */
-	plist_t plist = create_plist_message(msgtype);
-	plist_dict_set_item(plist, "PairRecordID", plist_new_string(pair_record_id));
-	if (data) {
-		plist_dict_set_item(plist, "PairRecordData", plist_copy(data));
-	}
-	
-	res = send_plist_packet(sfd, tag, plist);
-	plist_free(plist);
-
-	return res;
-}
-
-/**
- * Generates an event, i.e. calls the callback function.
- * A reference to a populated usbmuxd_event_t with information about the event
- * and the corresponding device will be passed to the callback function.
- */
-static void generate_event(usbmuxd_event_cb_t callback, const usbmuxd_device_info_t *dev, enum usbmuxd_event_type event, void *user_data)
-{
-	usbmuxd_event_t ev;
-
-	if (!callback || !dev) {
-		return;
-	}
-
-	ev.event = event;
-	memcpy(&ev.device, dev, sizeof(usbmuxd_device_info_t));
-
-	callback(&ev, user_data);
-}
-
-static int usbmuxd_listen_poll()
-{
-	int sfd;
-
-	sfd = connect_usbmuxd_socket();
-	if (sfd < 0) {
-		while (event_cb) {
-			if ((sfd = connect_usbmuxd_socket()) >= 0) {
-				break;
-			}
-			sleep(1);
-		}
-	}
-
-	return sfd;
-}
-
-#ifdef HAVE_INOTIFY
-static int use_inotify = 1;
-
-static int usbmuxd_listen_inotify()
-{
-	int inot_fd;
-	int watch_d;
-	int sfd;
-
-	if (!use_inotify) {
-		return -2;
-	}
-
-	sfd = connect_usbmuxd_socket();
-	if (sfd >= 0)
-		return sfd;
-
-	sfd = -1;
-	inot_fd = inotify_init ();
-	if (inot_fd < 0) {
-		DEBUG(1, "%s: Failed to setup inotify\n", __func__);
-		return -2;
-	}
-
-	/* inotify is setup, listen for events that concern us */
-	watch_d = inotify_add_watch (inot_fd, USBMUXD_DIRNAME, IN_CREATE);
-	if (watch_d < 0) {
-		DEBUG(1, "%s: Failed to setup watch descriptor for socket dir\n", __func__);
-		close (inot_fd);
-		return -2;
-	}
-
-	while (1) {
-		ssize_t len, i;
-		char buff[EVENT_BUF_LEN] = {0};
-
-		i = 0;
-		len = read (inot_fd, buff, EVENT_BUF_LEN -1);
-		if (len < 0)
-			goto end;
-		while (i < len) {
-			struct inotify_event *pevent = (struct inotify_event *) & buff[i];
-
-			/* check that it's ours */
-			if (pevent->mask & IN_CREATE &&
-			    pevent->len &&
-			    pevent->name[0] != 0 &&
-			    strcmp(pevent->name, USBMUXD_SOCKET_NAME) == 0) {
-				/* retry if usbmuxd isn't ready yet */
-				int retry = 10;
-				while (--retry >= 0) {
-					if ((sfd = connect_usbmuxd_socket ()) >= 0) {
-						break;
-					}
-					sleep(1);
-				}
-				goto end;
-			}
-			i += EVENT_SIZE + pevent->len;
-		}
-	}
-
-end:
-	inotify_rm_watch(inot_fd, watch_d);
-	close(inot_fd);
-
-	return sfd;
-}
-#endif /* HAVE_INOTIFY */
-
-/**
- * Tries to connect to usbmuxd and wait if it is not running.
- */
-static int usbmuxd_listen()
-{
-	int sfd;
-	uint32_t res = -1;
-	int tag;
-
-retry:
-
-#ifdef HAVE_INOTIFY
-	sfd = usbmuxd_listen_inotify();
-	if (sfd == -2)
-		sfd = usbmuxd_listen_poll();
-#else
-	sfd = usbmuxd_listen_poll();
-#endif
-
-	if (sfd < 0) {
-		DEBUG(1, "%s: ERROR: usbmuxd was supposed to be running here...\n", __func__);
-		return sfd;
-	}
-
-	tag = ++use_tag;
-	if (send_listen_packet(sfd, tag) <= 0) {
-		DEBUG(1, "%s: ERROR: could not send listen packet\n", __func__);
-		socket_close(sfd);
-		return -1;
-	}
-	if ((usbmuxd_get_result(sfd, tag, &res, NULL) == 1) && (res != 0)) {
-		socket_close(sfd);
-		if ((res == RESULT_BADVERSION) && (proto_version == 1)) {
-			proto_version = 0;
-			goto retry;
-		}
-		DEBUG(1, "%s: ERROR: did not get OK but %d\n", __func__, res);
-		return -1;
-	}
-	return sfd;
-}
-
-/**
- * Waits for an event to occur, i.e. a packet coming from usbmuxd.
- * Calls generate_event to pass the event via callback to the client program.
- */
-static int get_next_event(int sfd, usbmuxd_event_cb_t callback, void *user_data)
-{
-	struct usbmuxd_header hdr;
-	void *payload = NULL;
-
-	/* block until we receive something */
-	if (receive_packet(sfd, &hdr, &payload, 0) < 0) {
-		// when then usbmuxd connection fails,
-		// generate remove events for every device that
-		// is still present so applications know about it
-		FOREACH(usbmuxd_device_info_t *dev, &devices) {
-			generate_event(callback, dev, UE_DEVICE_REMOVE, user_data);
-			collection_remove(&devices, dev);
-			free(dev);
-		} ENDFOREACH
-		return -EIO;
-	}
-
-	if ((hdr.length > sizeof(hdr)) && !payload) {
-		DEBUG(1, "%s: Invalid packet received, payload is missing!\n", __func__);
-		return -EBADMSG;
-	}
-
-	if (hdr.message == MESSAGE_DEVICE_ADD) {
-		struct usbmuxd_device_record *dev = payload;
-		usbmuxd_device_info_t *devinfo = (usbmuxd_device_info_t*)malloc(sizeof(usbmuxd_device_info_t));
-		if (!devinfo) {
-			DEBUG(1, "%s: Out of memory!\n", __func__);
-			free(payload);
-			return -1;
-		}
-
-		devinfo->handle = dev->device_id;
-		devinfo->product_id = dev->product_id;
-		memset(devinfo->udid, '\0', sizeof(devinfo->udid));
-		memcpy(devinfo->udid, dev->serial_number, sizeof(devinfo->udid));
-
-		if (strcasecmp(devinfo->udid, "ffffffffffffffffffffffffffffffffffffffff") == 0) {
-			sprintf(devinfo->udid + 32, "%08x", devinfo->handle);
-		}
-
-		collection_add(&devices, devinfo);
-		generate_event(callback, devinfo, UE_DEVICE_ADD, user_data);
-	} else if (hdr.message == MESSAGE_DEVICE_REMOVE) {
-		uint32_t handle;
-		usbmuxd_device_info_t *devinfo;
-
-		memcpy(&handle, payload, sizeof(uint32_t));
-
-		devinfo = devices_find(handle);
-		if (!devinfo) {
-			DEBUG(1, "%s: WARNING: got device remove message for handle %d, but couldn't find the corresponding handle in the device list. This event will be ignored.\n", __func__, handle);
-		} else {
-			generate_event(callback, devinfo, UE_DEVICE_REMOVE, user_data);
-			collection_remove(&devices, devinfo);
-			free(devinfo);
-		}
-	} else if (hdr.length > 0) {
-		DEBUG(1, "%s: Unexpected message type %d length %d received!\n", __func__, hdr.message, hdr.length);
-	}
-	if (payload) {
-		free(payload);
-	}
-	return 0;
-}
-
-static void device_monitor_cleanup(void* data)
-{
-	FOREACH(usbmuxd_device_info_t *dev, &devices) {
-		collection_remove(&devices, dev);
-		free(dev);
-	} ENDFOREACH
-	collection_free(&devices);
-
-	socket_close(listenfd);
-	listenfd = -1;
-}
-
-/**
- * Device Monitor thread function.
- *
- * This function sets up a connection to usbmuxd
- */
-static void *device_monitor(void *data)
-{
-	collection_init(&devices);
-
-#ifndef WIN32
-	pthread_cleanup_push(device_monitor_cleanup, NULL);
-#endif
-	while (event_cb) {
-
-		listenfd = usbmuxd_listen();
-		if (listenfd < 0) {
-			continue;
-		}
-
-		while (event_cb) {
-			int res = get_next_event(listenfd, event_cb, data);
-			if (res < 0) {
-			    break;
-			}
-		}
-	}
-
-#ifndef WIN32
-	pthread_cleanup_pop(1);
-#else
-	device_monitor_cleanup(NULL);
-#endif
-	return NULL;
-}
-
-USBMUXD_API int usbmuxd_subscribe(usbmuxd_event_cb_t callback, void *user_data)
-{
-	int res;
-
-	if (!callback) {
-		return -EINVAL;
-	}
-	event_cb = callback;
-
-#ifdef WIN32
-	res = 0;
-	devmon = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)device_monitor, user_data, 0, NULL);
-	if (devmon == NULL) {
-		res = GetLastError();
-	}
-#else
-	res = pthread_create(&devmon, NULL, device_monitor, user_data);
-#endif
-	if (res != 0) {
-		DEBUG(1, "%s: ERROR: Could not start device watcher thread!\n", __func__);
-		return res;
-	}
-	return 0;
-}
-
-USBMUXD_API int usbmuxd_unsubscribe()
-{
-	event_cb = NULL;
-
-	socket_shutdown(listenfd, SHUT_RDWR);
-
-#ifdef WIN32
-	if (devmon != NULL) {
-		WaitForSingleObject(devmon, INFINITE);
-	}
-#else
-	if (pthread_kill(devmon, 0) == 0) {
-		pthread_cancel(devmon);
-		pthread_join(devmon, NULL);
-	}
-#endif
-
-	return 0;
-}
-
-static usbmuxd_device_info_t *device_info_from_device_record(struct usbmuxd_device_record *dev)
-{
-	if (!dev) {
-		return NULL;
-	}
-	usbmuxd_device_info_t *devinfo = (usbmuxd_device_info_t*)malloc(sizeof(usbmuxd_device_info_t));
-	if (!devinfo) {
-		DEBUG(1, "%s: Out of memory!\n", __func__);
-		return NULL;
-	}
-
-	devinfo->handle = dev->device_id;
-	devinfo->product_id = dev->product_id;
-	memset(devinfo->udid, '\0', sizeof(devinfo->udid));
-	memcpy(devinfo->udid, dev->serial_number, sizeof(devinfo->udid));
-
-	if (strcasecmp(devinfo->udid, "ffffffffffffffffffffffffffffffffffffffff") == 0) {
-		sprintf(devinfo->udid + 32, "%08x", devinfo->handle);
-	}
-
-	return devinfo;
-}
-
-static int usbhost_get_tag()
+static int usbhost_get_tag(void)
 {
 	if(use_tag == 0x7FFFFFFF){
 		use_tag = 0;
@@ -767,7 +346,8 @@ USBHOST_API int usbhost_get_device_list(int sockfd)
 				return -1;
 			}
 			memcpy(&(client->devinfo), dev, sizeof(struct usbmuxd_device_record));
-			client->connected = 0;			
+			client->connected = APP_NOCONNECT;
+			client->commufd = -1;
 			usbmuxd_log(LL_DEBUG, "Add Device:\nID:%uProductID:%u\nSerical:%s\nLocation:%u\nPadding:%u\n", 
 					client->devinfo.device_id, client->devinfo.product_id, 
 					client->devinfo.serial_number, client->devinfo.location, client->devinfo.padding);
@@ -792,15 +372,15 @@ USBHOST_API int usbhost_get_device_list(int sockfd)
 	return  0;
 }
 
-USBHOST_API int usbhost_get_device_by_udid(const char *udid)
+USBHOST_API int usbhost_dead_device_by_udid(uint32_t handle)
 {
-	if(!udid){
-		return 0;
-	}
 	pthread_mutex_lock(&device_list_mutex);
 	FOREACH(struct app_client *dev, &device_list) {
-		if(!strcmp(dev->devinfo.serial_number, udid)){
-			usbmuxd_log(LL_NOTICE, "Found device %d", dev->devinfo.device_id);
+		if(dev->devinfo.device_id == handle)){
+			usbmuxd_log(LL_NOTICE, "Set device Dead %d", dev->devinfo.device_id);
+			dev->connected = APP_DEAD;
+			socket_close(dev->commufd);
+			dev->commufd = -1;
 			pthread_mutex_unlock(&device_list_mutex);
 			return 1;
 		}
@@ -810,11 +390,39 @@ USBHOST_API int usbhost_get_device_by_udid(const char *udid)
 	return 0;
 }
 
+/**
+ * Tries to connect to usbmuxd .
+ */
+USBHOST_API int usbhost_listen(void)
+{
+	int sfd;
+	uint32_t res = -1;
+	int tag;
+
+	sfd = connect_usbmuxd_socket();
+	if (sfd < 0) {
+		usbmuxd_log(LL_ERROR, "Error Opening Unix Socket");
+		return -1;
+	}
+	tag = usbhost_get_tag();
+	if(send_listen_packet(sfd, tag) <= 0) {
+		usbmuxd_log(LL_ERROR, "ERROR: could not send listen packet");
+		socket_close(sfd);
+		return -1;
+	}
+	if((usbmuxd_get_result(sfd, tag, &res, NULL, NULL) == 1)&&(res != 0)){
+		socket_close(sfd);
+		usbmuxd_log(LL_ERROR, "ERROR: did not get OK but %d\n", res);
+		return -1;
+	}
+	
+	return sfd;
+}
+
 USBHOST_API int usbhost_connect(const int handle, const unsigned short port)
 {
 	int sfd;
 	int tag;
-	int connected = 0;
 	uint32_t res = -1;
 
 	sfd = connect_usbmuxd_socket();
@@ -847,7 +455,7 @@ USBHOST_API int usbhost_disconnect(int sfd)
 	return socket_close(sfd);
 }
 
-USBHOST_API int usbhost_send(int sfd, const char *data, uint32_t len, uint32_t *sent_bytes)
+USBHOST_API int usbhost_socket_send(int sfd, const char *data, uint32_t len, uint32_t *sent_bytes)
 {
 	int num_sent;
 
@@ -858,11 +466,11 @@ USBHOST_API int usbhost_send(int sfd, const char *data, uint32_t len, uint32_t *
 	num_sent = socket_send(sfd, (void*)data, len);
 	if (num_sent < 0) {
 		*sent_bytes = 0;
-		num_sent = errno;
-		DEBUG(1, "%s: Error %d when sending: %s\n", __func__, num_sent, strerror(num_sent));
+		num_sent = errno;		
+		usbmuxd_log(LL_ERROR, "Error %d when sending: %s", num_sent, strerror(num_sent));
 		return -num_sent;
 	} else if ((uint32_t)num_sent < len) {
-		DEBUG(1, "%s: Warning: Did not send enough (only %d of %d)\n", __func__, num_sent, len);
+		usbmuxd_log(LL_DEBUG, "Warning: Did not send enough (only %d of %d)", num_sent, len);
 	}
 
 	*sent_bytes = num_sent;
@@ -870,7 +478,7 @@ USBHOST_API int usbhost_send(int sfd, const char *data, uint32_t len, uint32_t *
 	return 0;
 }
 
-USBHOST_API int usbmuxd_recv_timeout(int sfd, char *data, uint32_t len, uint32_t *recv_bytes, unsigned int timeout)
+USBHOST_API int usbhost_recv_timeout(int sfd, char *data, uint32_t len, uint32_t *recv_bytes, unsigned int timeout)
 {
 	int num_recv = socket_receive_timeout(sfd, (void*)data, len, 0, timeout);
 	if (num_recv < 0) {
@@ -883,17 +491,151 @@ USBHOST_API int usbmuxd_recv_timeout(int sfd, char *data, uint32_t len, uint32_t
 	return 0;
 }
 
-USBHOST_API int usbmuxd_recv(int sfd, char *data, uint32_t len, uint32_t *recv_bytes)
+USBHOST_API int usbhost_socket_recv(int sfd, char *data, uint32_t len, uint32_t *recv_bytes)
 {
-	return usbmuxd_recv_timeout(sfd, data, len, recv_bytes, 5000);
+	return usbhost_recv_timeout(sfd, data, len, recv_bytes, 5000);
 }
 
+/**
+ * Waits for an event to occur, i.e. a packet coming from usbmuxd.
+ * Calls generate_event to pass the event via callback to the client program.
+ */
+static int monitor_event(int sfd)
+{
+	struct usbmuxd_header hdr;
+	void *payload = NULL;
+
+	/* block until we receive something */
+	if (receive_packet(sfd, &hdr, &payload, 0) < 0){
+		return -1;
+	}
+
+	if((hdr.length > sizeof(hdr)) && !payload){
+		usbmuxd_log(LL_ERROR, "Invalid packet received, payload is missing!");
+		return -EBADMSG;
+	}
+
+	if (hdr.message == MESSAGE_DEVICE_ADD) {
+		struct usbmuxd_device_record *dev = payload;
+		struct app_client *client = NULL;
+		client = calloc(1, sizeof(struct app_client));
+		if(client == NULL){
+			usbmuxd_log(LL_ERROR, "Calloc Memory Error");
+			if(payload){
+				free(payload);
+			}				
+			return -2;
+		}
+		memcpy(&(client->devinfo), dev, sizeof(struct usbmuxd_device_record));
+		client->connected = APP_NOCONNECT;
+		client->commufd = -1;
+		usbmuxd_log(LL_DEBUG, "Add Device:\nID:%uProductID:%u\nSerical:%s\nLocation:%u\nPadding:%u\n", 
+				client->devinfo.device_id, client->devinfo.product_id, 
+				client->devinfo.serial_number, client->devinfo.location, client->devinfo.padding);
+		pthread_mutex_lock(&device_list_mutex);
+		collection_add(&device_list, client);
+		pthread_mutex_unlock(&device_list_mutex);
+		generate_event(callback, devinfo, UE_DEVICE_ADD, user_data);
+	} else if (hdr.message == MESSAGE_DEVICE_REMOVE) {
+		uint32_t handle;
+
+		memcpy(&handle, payload, sizeof(uint32_t));
+		usbhost_dead_device_by_udid(handle);
+	}else if(hdr.length > 0) {
+		usbmuxd_log(LL_DEBUG, "Unexpected message type %d length %d received!",hdr.message, hdr.length);
+	}
+	if (payload) {
+		free(payload);
+	}
+	return 0;
+}
+
+static void device_monitor(void* arg)
+{
+	int res;
+	
+	while(1){
+		if(app_proxy.listenfd < 0){
+			usbmuxd_log(LL_DEBUG, "Open Listen Socket..");
+			if((app_proxy.listenfd = usbhost_listen()) < 0){
+				usbmuxd_log(LL_ERROR, "Open Listen Socket Error[%d]..", app_proxy.listenfd);
+				usleep(500000);
+				continue;
+			}
+		}
+		/*Handle Event*/
+		res = monitor_event(app_proxy.listenfd);
+		if(res == -1){
+			usbmuxd_log(LL_ERROR, "Receive Listen Package Error Close socket..");
+			socket_close(app_proxy.listenfd);
+			app_proxy.listenfd = -1;
+			continue;
+		}
+	}
+
+}
+
+/**
+ * Examine the state of a connection's buffers and
+ * update all connection flags and masks accordingly.
+ * Does not do I/O.
+ *
+ * @param conn The connection to update.
+ */
+static void update_app_connection(struct app_client*conn)
+{
+	if(conn->ob_size < conn->ob_capacity)
+		conn->events |= POLLOUT;
+	else
+		conn->events &= ~POLLOUT;
+
+	if(conn->ib_size < conn->ib_capacity)
+		conn->events |= POLLIN;
+	else
+		conn->events &= ~POLLIN;
+
+	usbmuxd_log(LL_SPEW, "update_connection: sendable %d, events %d, flags %d", conn->sendable, conn->events, conn->flags);
+}
+
+USBHOST_API int usbhost_subscribe(void)
+{
+	int res;
+
+	res = pthread_create(&(app_proxy.monitor), NULL, device_monitor, NULL);
+	if (res != 0) {
+		usbmuxd_log(LL_ERROR, "ERROR: Could not start device watcher thread!");
+		return res;
+	}
+	return 0;
+}
+
+USBHOST_API int usbhost_unsubscribe(void)
+{
+	if (pthread_kill(app_proxy.monitor, 0) == 0) {
+		pthread_cancel(app_proxy.monitor);
+		pthread_join(app_proxy.monitor, NULL);
+	}
+	/*Close listen socket*/
+	socket_shutdown(app_proxy.listenfd, SHUT_RDWR);
+
+	return 0;
+}
 
 USBHOST_API void usbhost_application_init(void)
 {
 	usbmuxd_log(LL_DEBUG, "application layer init");
 	collection_init(&device_list);
 	pthread_mutex_init(&device_list_mutex, NULL);
-	next_device_id = 1;
+	/*Init Global Var*/
+	memset(&app_proxy, 0, sizeof(app_proxy));
+	app_proxy.device = &device_list;
+	app_proxy.listenfd = -1;
+}
+
+USBHOST_API void usbhost_application_run(void)
+{
+
+	usbhost_application_init();
+	
 }
 
