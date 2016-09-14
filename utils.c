@@ -355,3 +355,19 @@ uint64_t mstime64(void)
 	// time_t could be 4 bytes
 	return ((long long)tv.tv_sec) * 1000LL + ((long long)tv.tv_usec) / 1000LL;
 }
+
+#ifndef HAVE_PPOLL
+int ppoll(struct pollfd *fds, nfds_t nfds, const struct timespec *timeout, const sigset_t *sigmask)
+{
+	int ready;
+	sigset_t origmask;
+	int to = timeout->tv_sec*1000 + timeout->tv_nsec/1000000;
+
+	sigprocmask(SIG_SETMASK, sigmask, &origmask);
+	ready = poll(fds, nfds, to);
+	sigprocmask(SIG_SETMASK, &origmask, NULL);
+
+	return ready;
+}
+#endif
+

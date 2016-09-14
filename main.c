@@ -159,21 +159,6 @@ static void set_signal_handlers(void)
 	sigaction(SIGUSR2, &sa, NULL);
 }
 
-#ifndef HAVE_PPOLL
-static int ppoll(struct pollfd *fds, nfds_t nfds, const struct timespec *timeout, const sigset_t *sigmask)
-{
-	int ready;
-	sigset_t origmask;
-	int to = timeout->tv_sec*1000 + timeout->tv_nsec/1000000;
-
-	sigprocmask(SIG_SETMASK, sigmask, &origmask);
-	ready = poll(fds, nfds, to);
-	sigprocmask(SIG_SETMASK, &origmask, NULL);
-
-	return ready;
-}
-#endif
-
 static int main_loop(int listenfd)
 {
 	int to, cnt, i, dto;
