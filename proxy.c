@@ -66,6 +66,7 @@
 #include "socket.h"
 // misc utility functions
 #include "utils.h"
+#include "protocol.h"
 
 #define USBHOST_PORT		8080
 #define USBHOST_NBUF_SIZE		262144
@@ -764,37 +765,6 @@ static void update_app_connection(struct app_client*conn)
 	usbmuxd_log(LL_SPEW, "update_connection: sendable %d, events %d, flags %d", conn->sendable, conn->events, conn->flags);
 }
 
-static void application_process_send(struct app_client *client)
-{
-	int res;
-	if(!client->ob_size) {
-		usbmuxd_log(LL_WARNING, "Client %d OUT process but nothing to send?", client->fd);
-		client->events &= ~POLLOUT;
-		return;
-	}
-	res = send(client->fd, client->ob_buf, client->ob_size, 0);
-	if(res <= 0) {
-		usbmuxd_log(LL_ERROR, "Send to client fd %d failed: %d %s", client->fd, res, strerror(errno));
-		client_close(client);
-		return;
-	}
-	if((uint32_t)res == client->ob_size) {
-		client->ob_size = 0;
-		client->events &= ~POLLOUT;
-		if(client->state == CLIENT_CONNECTING2) {
-			usbmuxd_log(LL_DEBUG, "Client %d switching to CONNECTED state", client->fd);
-			client->state = CLIENT_CONNECTED;
-			client->events = client->devents;
-			// no longer need this
-			free(client->ob_buf);
-			client->ob_buf = NULL;
-		}
-	} else {
-		client->ob_size -= res;
-		memmove(client->ob_buf, client->ob_buf + res, client->ob_size);
-	}
-}
-
 static int protocol_decode(struct app_client *client, struct scsi_head *scsi)
 {
 	struct scsi_head *shder = NULL;
@@ -860,7 +830,7 @@ static int application_command(struct app_client *client)
 			handled = storage_read(&scsi, client);
 			if(handled < 0){
 				return -1;
-			}		
+			}
 			client->events |= POLLOUT;
 			break;
 		case SCSI_WRITE:
@@ -868,17 +838,18 @@ static int application_command(struct app_client *client)
 			if(handled < 0){
 				return -1;
 			}
-			/*Write Finish*/
-			bytes = SCSI_HEAD_SIZE+scsi.len;
-			client->ib_size -= bytes;
-			memmove(client->ib_buf, client->ib_buf + bytes, client->ib_size);			
+			/*Write Finish*/		
 			client->events |= POLLIN;
 			break;
 		case SCSI_TEST:
 		default:
+			handled = 0;
 			usbmuxd_log(LL_ERROR, "Unhandle SCSI Type-->%d",  scsi.ctrid);
-			handled = -1;
 	}
+	/*Offset Buffer*/
+	bytes = SCSI_HEAD_SIZE+scsi.len;
+	client->ib_size -= bytes;
+	memmove(client->ib_buf, client->ib_buf + bytes, client->ib_size);	
 	/*Encode Buffer and Send To peer*/
 	return handled;
 }
@@ -902,7 +873,30 @@ static void application_process_recv(struct app_client *client)
 	if(res == -1){
 		application_connection_setdown(client);
 	}
-	client->ib_size = 0;
+}
+
+static void application_process_send(struct app_client *client)
+{
+	int res;
+	if(!client->ob_size) {
+		usbmuxd_log(LL_WARNING, "Client %d OUT process but nothing to send?", client->fd);
+		client->events &= ~POLLOUT;
+		return;
+	}
+	res = send(client->commufd, client->ob_buf, client->ob_size, 0);
+	if(res <= 0) {
+		usbmuxd_log(LL_ERROR, "Send to client fd %d failed: %d %s", client->commufd, res, strerror(errno));
+		application_connection_setdown(client);
+		return;
+	}
+	if((uint32_t)res == client->ob_size) {
+		client->ob_size = 0;
+		client->events &= ~POLLOUT;
+	} else {
+		client->ob_size -= res;
+		client->events |= POLLOUT;
+		memmove(client->ob_buf, client->ob_buf + res, client->ob_size);
+	}
 }
 
 static void application_layer_process(int fd, short events)
@@ -1042,7 +1036,7 @@ USBHOST_API void usbhost_application_init(void)
 	app_proxy.listenfd = -1;
 }
 
-USBHOST_API void usbhost_application_run(void)
+USBHOST_API void usbhost_application_run(void *args)
 {
 	/*Init*/
 	usbhost_application_init();
