@@ -23,6 +23,8 @@
 #define USB_H
 
 #include <stdint.h>
+#include <libusb.h>
+
 #include "utils.h"
 
 #define INTERFACE_CLASS 255
@@ -78,13 +80,27 @@
 
 #define AOA_TCP_PORT				0xFF
 
-enum{
+enum USB_TYPE{
 	USB_STORAGE=0,
 	USB_ANDROID=1,
 	USB_IOS
-}USB_TYPE;
+};
 
-struct usb_device;
+struct usb_device {
+	libusb_device_handle *dev;
+	uint8_t bus, address;
+	uint16_t vid, pid;
+	char serial[256];
+	int alive;
+	int type;
+	uint8_t interface, ep_in, ep_out;
+	struct collection rx_xfers;
+	struct collection tx_xfers;
+	int wMaxPacketSize;
+	uint64_t speed;
+};
+
+struct mux_connection;
 
 int usb_init(void);
 void usb_shutdown(void);
@@ -99,5 +115,6 @@ int usb_discover(void);
 void usb_autodiscover(int enable);
 int usb_process(void);
 int usb_process_timeout(int msec);
+int usb_send_aoa(struct mux_connection *conn, const unsigned char *buf, int length);
 
 #endif

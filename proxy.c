@@ -25,20 +25,14 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
 
-#ifdef WIN32
-  #define USBHOST_API __declspec( dllexport )
-#else
-  #ifdef HAVE_FVISIBILITY
-    #define USBHOST_API __attribute__((visibility("default")))
-  #else
-    #define USBHOST_API
-  #endif
-#endif
 
 #ifdef WIN32
 #include <windows.h>
@@ -67,10 +61,12 @@
 // misc utility functions
 #include "utils.h"
 #include "protocol.h"
+#include "proxy.h"
+#include "log.h"
 
 #define USBHOST_PORT		8080
 #define USBHOST_NBUF_SIZE		262144
-#define USBHOST_POLL_TIMER		(2*1000) //2s
+#define USBHOST_POLL_TIMER		(2*1000) /*2s*/
 #define USBHOST_STORAGE			64
 struct app_client{
 	struct usbmuxd_device_record devinfo;
@@ -196,7 +192,7 @@ static int usbmuxd_get_result(int sfd, uint32_t tag, uint32_t *result, void **re
 
 	if (hdr.message == MESSAGE_RESULT) {
 		if (hdr.tag != tag) {
-			usbmuxd_log(LL_ERROR, "WARNING: tag mismatch (%d != %d). Proceeding anyway.");
+			usbmuxd_log(LL_ERROR, "WARNING: tag mismatch (%u != %u). Proceeding anyway.", hdr.tag, tag);
 		}
 		if (res) {
 			memcpy(result, res, sizeof(uint32_t));
@@ -317,7 +313,7 @@ static int storage_write(struct scsi_head *scsi, char *dev, unsigned char *paylo
 		return -1;
 	}
 	do {
-		res  = write(fd, payload + already, wlen - already, 0);
+		res  = write(fd, payload + already, wlen - already);
 		if (res < 0) {
 			if(errno ==  EINTR ||
 					errno ==  EAGAIN){
@@ -349,11 +345,11 @@ static int storage_read(struct scsi_head *scsi, struct app_client *client)
 
 	fd = open(client->storage, O_RDWR);
 	if(fd < 0){
-		usbmuxd_log(LL_ERROR, "Open %s Error:%s", dev, strerror(errno));
+		usbmuxd_log(LL_ERROR, "Open %s Error:%s", client->storage, strerror(errno));
 		return -1;
 	}
 	if(lseek(fd, offset, SEEK_SET) < 0){
-		usbmuxd_log(LL_ERROR, "Lseek %s Error:%s", dev, strerror(errno));
+		usbmuxd_log(LL_ERROR, "Lseek %s Error:%s", client->storage, strerror(errno));
 		close(fd);
 		return -1;
 	}
@@ -368,7 +364,7 @@ static int storage_read(struct scsi_head *scsi, struct app_client *client)
 	memcpy(payload, scsi, sizeof(struct scsi_head));
 	already += SCSI_HEAD_SIZE;
 	do {
-		res  = read(fd, payload + already, wlen - already, 0);
+		res  = read(fd, payload + already, wlen - already);
 		if (res < 0) {
 			if(errno ==  EINTR ||
 					errno ==  EAGAIN){
@@ -417,7 +413,6 @@ USBHOST_API int usbhost_get_device_list(int sockfd)
 	struct usbmuxd_device_record *dev;
 	struct app_client *client = NULL;
 	char *response = NULL;
-	int dev_cnt = 0;
 
 	if(sockfd < 0){
 		sfd = connect_usbmuxd_socket();
@@ -437,11 +432,11 @@ USBHOST_API int usbhost_get_device_list(int sockfd)
 		return -1;
 	}
 	/*Decode result*/
-	if ((usbmuxd_get_result(sfd, tag, &res, &response, &reslen) == 1) && (res == 0)) {
+	if ((usbmuxd_get_result(sfd, tag, &res, (void **)&response, &reslen) == 1) && (res == 0)) {
 		while(curlen < reslen){
 			dev = (struct usbmuxd_device_record *)(response+curlen);
 			if(dev->padding != USBHOST_DPADDING_MAGIC){
-				usbmuxd_log(LL_DEBUG, "Magic Mismatch-->%2f", dev->padding);
+				usbmuxd_log(LL_DEBUG, "Magic Mismatch-->0x%2x", dev->padding);
 				continue;
 			}
 			client = calloc(1, sizeof(struct app_client));
@@ -484,7 +479,7 @@ USBHOST_API int usbhost_dead_device_by_udid(uint32_t handle)
 {
 	pthread_mutex_lock(&device_list_mutex);
 	FOREACH(struct app_client *dev, &device_list) {
-		if(dev->devinfo.device_id == handle)){
+		if(dev->devinfo.device_id == handle){
 			usbmuxd_log(LL_NOTICE, "Set device Dead %d", dev->devinfo.device_id);
 			dev->connected = APP_DEAD;
 			socket_close(dev->commufd);
@@ -502,7 +497,7 @@ USBHOST_API int usbhost_init_device_by_udid(uint32_t handle, int confd)
 {
 	pthread_mutex_lock(&device_list_mutex);
 	FOREACH(struct app_client *dev, &device_list) {
-		if(dev->devinfo.device_id == handle)){
+		if(dev->devinfo.device_id == handle){
 			usbmuxd_log(LL_NOTICE, "Set device INIT %d", dev->devinfo.device_id);
 			dev->connected = APP_CONNECTED;
 			dev->commufd = confd;
@@ -685,6 +680,14 @@ static int monitor_event(int sfd)
 	if (hdr.message == MESSAGE_DEVICE_ADD) {
 		struct usbmuxd_device_record *dev = payload;
 		struct app_client *client = NULL;
+		
+		if(dev->padding != USBHOST_DPADDING_MAGIC){
+			usbmuxd_log(LL_DEBUG, "Magic Mismatch-->0x%2x", dev->padding);
+			if(payload){
+				free(payload);
+			}			
+			return 0;
+		}
 		client = calloc(1, sizeof(struct app_client));
 		if(client == NULL){
 			usbmuxd_log(LL_ERROR, "Calloc Memory Error");
@@ -702,7 +705,6 @@ static int monitor_event(int sfd)
 		pthread_mutex_lock(&device_list_mutex);
 		collection_add(&device_list, client);
 		pthread_mutex_unlock(&device_list_mutex);
-		generate_event(callback, devinfo, UE_DEVICE_ADD, user_data);
 	} else if (hdr.message == MESSAGE_DEVICE_REMOVE) {
 		uint32_t handle;
 
@@ -717,7 +719,7 @@ static int monitor_event(int sfd)
 	return 0;
 }
 
-static void device_monitor(void* arg)
+static void *device_monitor(void* arg)
 {
 	int res;
 	
@@ -739,7 +741,7 @@ static void device_monitor(void* arg)
 			continue;
 		}
 	}
-
+	return NULL;
 }
 
 /**
@@ -762,7 +764,7 @@ static void update_app_connection(struct app_client*conn)
 	else
 		conn->events &= ~POLLIN;
 
-	usbmuxd_log(LL_SPEW, "update_connection: sendable %d, events %d, flags %d", conn->sendable, conn->events, conn->flags);
+	usbmuxd_log(LL_SPEW, "update_connection: events %d", conn->events);
 }
 
 static int protocol_decode(struct app_client *client, struct scsi_head *scsi)
@@ -794,6 +796,10 @@ static int protocol_decode(struct app_client *client, struct scsi_head *scsi)
 			usbmuxd_log(LL_ERROR, "READ Too Big Package %u/%uBytes", 
 					payload, client->ob_capacity);
 			return PRO_BADPACKAGE;
+		}else if(payload > (client->ob_capacity-client->ib_size)){
+			usbmuxd_log(LL_ERROR, "READ Buffer is Not Enough %u/%uBytes", 
+					payload, client->ob_capacity-client->ib_size);
+			return PRO_NOSPACE;
 		}
 	}
 	return PRO_OK;
@@ -802,7 +808,6 @@ static int protocol_decode(struct app_client *client, struct scsi_head *scsi)
 static int application_command(struct app_client *client)
 {
 	int handled = -1;
-	int command = -1;
 	uint32_t bytes;
 	struct scsi_head scsi;
 	int res;
@@ -822,6 +827,10 @@ static int application_command(struct app_client *client)
 	}else if(res == PRO_INCOMPLTE){
 		/*Recevie Not Finish*/
 		client->events |= POLLIN;
+		return 0;
+	}else if(res == PRO_NOSPACE){
+		/*Out Buffer Not Enough to read*/
+		client->events |= POLLOUT;
 		return 0;
 	}
 	/*Check Buffer is Enough*/
@@ -857,7 +866,12 @@ static int application_command(struct app_client *client)
 static void application_process_recv(struct app_client *client)
 {
 	int res;
-	
+
+	if(client->ib_size >= client->ib_capacity){
+		usbmuxd_log(LL_ERROR, "Receive Buffer is Full [%uBytes]", client->ib_capacity);
+		client->events &= ~POLLIN;
+		return;
+	}
 	res = recv(client->commufd, client->ib_buf + client->ib_size, client->ib_capacity - client->ib_size, 0);
 	if(res <= 0) {
 		if(res < 0)
@@ -879,7 +893,7 @@ static void application_process_send(struct app_client *client)
 {
 	int res;
 	if(!client->ob_size) {
-		usbmuxd_log(LL_WARNING, "Client %d OUT process but nothing to send?", client->fd);
+		usbmuxd_log(LL_WARNING, "Client %d OUT process but nothing to send?", client->commufd);
 		client->events &= ~POLLOUT;
 		return;
 	}
@@ -904,7 +918,7 @@ static void application_layer_process(int fd, short events)
 	struct app_client *client = NULL;
 	pthread_mutex_lock(&device_list_mutex);
 	FOREACH(struct app_client *lc, app_proxy.device) {
-		if(lc->fd == fd) {
+		if(lc->commufd == fd) {
 			client = lc;
 			break;
 		}
@@ -999,6 +1013,8 @@ static int application_layer_loop()
 		}
 	}	
 	fdlist_free(&pollfds);
+
+	return 0;
 }
 
 USBHOST_API int usbhost_subscribe(void)
@@ -1033,10 +1049,11 @@ USBHOST_API void usbhost_application_init(void)
 	/*Init Global Var*/
 	memset(&app_proxy, 0, sizeof(app_proxy));
 	app_proxy.device = &device_list;
-	app_proxy.listenfd = -1;
+	app_proxy.listenfd = -1;	
+	app_proxy.connected = 0;
 }
 
-USBHOST_API void usbhost_application_run(void *args)
+USBHOST_API void* usbhost_application_run(void *args)
 {
 	/*Init*/
 	usbhost_application_init();
@@ -1048,7 +1065,7 @@ USBHOST_API void usbhost_application_run(void *args)
 	/*Start Monitor Thread To inotify device add and remove*/
 	if(usbhost_subscribe() != 0){
 		usbmuxd_log(LL_ERROR, "Start Subscribe Failed");
-		return ;
+		return NULL;
 	}
 	/*Start Main Loop Handle application Task*/
 	application_layer_loop();

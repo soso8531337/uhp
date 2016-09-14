@@ -49,7 +49,7 @@
 // 3 seems to be an all round sensible number - giving better read perf than
 // Apples usbmuxd, at least.
 #define NUM_RX_LOOPS 3
-
+/*
 struct usb_device {
 	libusb_device_handle *dev;
 	uint8_t bus, address;
@@ -63,7 +63,7 @@ struct usb_device {
 	int wMaxPacketSize;
 	uint64_t speed;
 };
-
+*/
 struct accessory_t {
 	uint32_t aoa_version;
 	uint16_t vid;
@@ -188,12 +188,12 @@ static void tx_callback(struct libusb_transfer *xfer)
 
 static void tx_callback_aoa(struct libusb_transfer *xfer)
 {
-	struct mux_connection *conn= xfer->user_data;
+	struct mux_connection *conn= (struct mux_connection *)xfer->user_data;
 	struct usb_device *dev = conn->dev;
 	usbmuxd_log(LL_SPEW, "TX callback dev %d-%d len %d -> %d status %d", dev->bus, dev->address, xfer->length, xfer->actual_length, xfer->status);
 	if(xfer->status == LIBUSB_TRANSFER_COMPLETED){
 		conn->rx_ack += xfer->actual_length;
-	}else(xfer->status != LIBUSB_TRANSFER_COMPLETED) {
+	}else{
 		switch(xfer->status) {
 			case LIBUSB_TRANSFER_COMPLETED: //shut up compiler
 			case LIBUSB_TRANSFER_ERROR:

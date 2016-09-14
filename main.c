@@ -42,12 +42,17 @@
 #include <getopt.h>
 #include <pwd.h>
 #include <grp.h>
+#include <pthread.h>
 
 #include "log.h"
 #include "usb.h"
 #include "device.h"
 #include "client.h"
-#include "conf.h"
+#include "proxy.h"
+
+#define PACKAGE_NAME "USB Host Project"
+#define PACKAGE_VERSION	"1.0"
+#define PACKAGE_STRING	"USB Host Project 1.0"
 
 static const char *socket_path = "/var/run/usbmuxd";
 static const char *lockfile = "/var/run/usbmuxd.pid";
@@ -426,7 +431,8 @@ int main(int argc, char *argv[])
 	int res = 0;
 	int lfd;
 	struct flock lock;
-	char pids[10];
+	char pids[10];	
+	pthread_t proxy;
 
 	parse_opts(argc, argv);
 
@@ -645,6 +651,12 @@ int main(int argc, char *argv[])
 	}
 	if (opt_enable_exit) {
 		usbmuxd_log(LL_NOTICE, "Enabled exit on SIGUSR1 if no devices are attached. Start a new instance with \"--exit\" to trigger.");
+	}
+	/*Start proxy thread*/
+	res = pthread_create(&proxy, NULL, usbhost_application_run, NULL);
+	if (res != 0) {
+		usbmuxd_log(LL_ERROR, "ERROR: Could not start proxy thread!");
+		goto terminate;
 	}
 
 	res = main_loop(listenfd);

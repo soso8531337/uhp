@@ -21,8 +21,8 @@
 
 #ifndef UTILS_H
 #define UTILS_H
-#define _GNU_SOURCE
 #include <poll.h>
+#include <stdint.h>
 
 enum fdowner {
 	FD_LISTEN,
@@ -84,9 +84,5 @@ enum plist_format_t {
 
 uint64_t mstime64(void);
 void get_tick_count(struct timeval * tv);
-
-#ifndef HAVE_PPOLL
-int ppoll(struct pollfd *fds, nfds_t nfds, const struct timespec *timeout, const sigset_t *sigmask)
-#endif
 
 #endif

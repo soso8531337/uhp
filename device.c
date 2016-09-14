@@ -60,14 +60,6 @@ enum mux_dev_state {
 	MUXDEV_DEAD		// dead
 };
 
-enum mux_conn_state {
-	CONN_CONNECTING,	// SYN
-	CONN_CONNECTED,		// SYN/SYNACK/ACK -> active
-	CONN_REFUSED,		// RST received during SYN
-	CONN_DYING,			// RST received
-	CONN_DEAD			// being freed; used to prevent infinite recursion between client<->device freeing
-};
-
 struct mux_header
 {
 	uint32_t protocol;
@@ -88,6 +80,7 @@ struct mux_device;
 
 #define CONN_ACK_PENDING 1
 
+/*
 struct mux_connection
 {
 	struct mux_device *dev;
@@ -107,6 +100,7 @@ struct mux_connection
 	short events;
 	uint64_t last_ack_time;
 };
+*/
 
 struct mux_device
 {
@@ -126,6 +120,8 @@ struct mux_device
 
 static struct collection device_list;
 pthread_mutex_t device_list_mutex;
+
+static void update_connection(struct mux_connection *conn);
 
 static struct mux_device* get_mux_device_for_id(int device_id)
 {
@@ -276,7 +272,8 @@ static int send_aoa(struct mux_connection *conn, const unsigned char *data, int 
 {
 	int res;
 	if((res = usb_send_aoa(conn, data, length)) < 0) {
-		usbmuxd_log(LL_ERROR, "usb_send_aoa failed while sending packet (len %d) to device %d: %d", total, dev->id, res);
+		usbmuxd_log(LL_ERROR, "usb_send_aoa failed while sending packet (len %d) to device %d: %d", 
+					length, conn->dev->id, res);
 		return res;
 	}
 	conn->tx_acked = conn->tx_ack;
@@ -317,7 +314,7 @@ static void connection_teardown(struct mux_connection *conn)
 	if(conn->state == CONN_DEAD)
 		return;
 	usbmuxd_log(LL_DEBUG, "connection_teardown dev %d sport %d dport %d", conn->dev->id, conn->sport, conn->dport);
-	if(conn->dev->usbdev.type == USB_IOS&&
+	if(conn->dev->usbdev->type == USB_IOS&&
 		(conn->dev->state != MUXDEV_DEAD && conn->state != CONN_DYING && conn->state != CONN_REFUSED)) {
 		res = send_tcp(conn, TH_RST, NULL, 0);
 		if(res < 0)
@@ -389,7 +386,7 @@ int device_start_connect(int device_id, uint16_t dport, struct mux_client *clien
 	conn->ib_capacity = CONN_INBUF_SIZE;
 	conn->ib_size = 0;
 
-	if(dev->usbdev.type == USB_ANDROID){
+	if(dev->usbdev->type == USB_ANDROID){
 		/*set rx_win to 131072, android dose not have rx ack*/
 		conn->rx_win = 131072;
 		conn->sport = AOA_TCP_PORT;
@@ -519,13 +516,13 @@ void device_client_process(int device_id, struct mux_client *client, short event
 			connection_teardown(conn);
 			return;
 		}
-		if(conn->dev->usbdev.type == USB_IOS){
+		if(conn->dev->usbdev->type == USB_IOS){
 			res = send_tcp(conn, TH_ACK, conn->ob_buf, size);
 			if(res < 0) {
 				connection_teardown(conn);
 				return;
 			}
-		}else if(conn->dev->usbdev.type == USB_ANDROID){
+		}else if(conn->dev->usbdev->type == USB_ANDROID){
 			res = send_aoa(conn, conn->ob_buf, size);
 			if(res < 0) {
 				connection_teardown(conn);
@@ -757,7 +754,7 @@ static void device_aoa_input(struct mux_device *dev,  unsigned char *payload, ui
 	} ENDFOREACH 
 	
 	if(!conn) {
-		usbmuxd_log(LL_INFO, "No connection for AOA Device %d incoming packet %d->%d", dev->id);
+		usbmuxd_log(LL_INFO, "No connection for AOA Device %d incoming packet", dev->id);
 		return;
 	}
 	connection_device_input(conn, payload, payload_length);
@@ -798,7 +795,7 @@ void device_data_input(struct usb_device *usbdev, unsigned char *buffer, uint32_
 
 	usbmuxd_log(LL_SPEW, "Mux data input for device %p: %p len %d", dev, buffer, length);
 	/*Androd AOA Handle*/
-	if(dev->usbdev.type == USB_ANDROID){
+	if(dev->usbdev->type == USB_ANDROID){
 		device_aoa_input(dev, buffer, length);
 		return ;
 	}
@@ -891,7 +888,7 @@ int device_add(struct usb_device *usbdev)
 	dev->pktlen = 0;
 	dev->preflight_cb_data = NULL;
 	dev->version = 0;
-	if(dev->usbdev.type == USB_IOS){
+	if(dev->usbdev->type == USB_IOS){
 		/*IOS Device HANDLE*/	
 		dev->state = MUXDEV_INIT;
 		dev->visible = 0;
@@ -905,7 +902,7 @@ int device_add(struct usb_device *usbdev)
 			free(dev);
 			return res;
 		}
-	}else if(dev->usbdev.type == USB_ANDROID){
+	}else if(dev->usbdev->type == USB_ANDROID){
 		/*Android AOA Device is easy*/
 		/*Notify to proxy, device ADD*/
 		dev->state = MUXDEV_ACTIVE;

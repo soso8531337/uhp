@@ -35,13 +35,10 @@
 #include <pthread.h>
 #include <fcntl.h>
 
-#include <plist/plist.h>
-
 #include "log.h"
 #include "usb.h"
 #include "client.h"
 #include "device.h"
-#include "conf.h"
 
 #define CMD_BUF_SIZE	0x10000
 #define REPLY_BUF_SIZE	0x10000
@@ -308,6 +305,7 @@ static int notify_device_add(struct mux_client *client, struct device_info *dev)
 	dmsg.serial_number[255] = 0;
 	dmsg.location = dev->location;
 	dmsg.product_id = dev->pid;
+	dmsg.padding = USBHOST_DPADDING_MAGIC;
 	res = send_pkt(client, 0, MESSAGE_DEVICE_ADD, &dmsg, sizeof(dmsg));
 
 	return res;
@@ -344,6 +342,51 @@ static int start_listen(struct mux_client *client)
 	return count;
 }
 
+static int send_device_list(struct mux_client *client, uint32_t tag)
+{
+	struct device_info *devs = NULL;
+	struct device_info *dev;
+	struct usbmuxd_device_record *dmsgs = NULL;
+	struct usbmuxd_device_record *dmsg = NULL;
+	
+	int count, i, res;
+
+	count = device_get_list(0, &devs);
+	if(!count){
+		if (devs)
+			free(devs);	
+		return 0;
+	}
+	dmsgs = calloc(1, count*sizeof(struct usbmuxd_device_record));
+	if(!dmsgs){
+		if (devs)
+			free(devs);	
+		return 0;
+	}
+	dev = devs;
+	dmsg = dmsgs;
+	for(i=0; devs && i < count; i++) {
+		dmsg->device_id = dev->id;
+		dmsg->product_id = dev->pid;
+		memcpy(dmsg->serial_number, dev->serial, 256);
+		dmsg->padding = USBHOST_DPADDING_MAGIC;
+		dmsg->location = dev->location;
+		dev++;
+		dmsg++;
+	}
+	if (devs)
+		free(devs);
+
+	if(dmsgs){
+		free(dmsgs);
+	}
+	res = send_pkt(client, tag, MESSAGE_DEVICE_LIST,
+			dmsgs, count*sizeof(struct usbmuxd_device_record));
+	
+	return res;
+
+}
+
 static int client_command(struct mux_client *client, struct usbmuxd_header *hdr)
 {
 	int res;
@@ -365,7 +408,6 @@ static int client_command(struct mux_client *client, struct usbmuxd_header *hdr)
 
 	struct usbmuxd_connect_request *ch;
 	char *payload;
-	uint32_t payload_size;
 
 	switch(hdr->message) {
 		case MESSAGE_PLIST:
@@ -390,7 +432,7 @@ static int client_command(struct mux_client *client, struct usbmuxd_header *hdr)
 			}
 			return 0;
 		case MESSAGE_DEVICE_LIST:
-			
+			return send_device_list(client, hdr->tag);
 		default:
 			usbmuxd_log(LL_ERROR, "Client %d invalid command %d", client->fd, hdr->message);
 			if(send_result(client, hdr->tag, RESULT_BADCOMMAND) < 0)

@@ -23,7 +23,34 @@
 #include "usb.h"
 #include "client.h"
 
-struct mux_connection;
+enum mux_conn_state {
+	CONN_CONNECTING,	// SYN
+	CONN_CONNECTED,		// SYN/SYNACK/ACK -> active
+	CONN_REFUSED,		// RST received during SYN
+	CONN_DYING,			// RST received
+	CONN_DEAD			// being freed; used to prevent infinite recursion between client<->device freeing
+};
+
+struct mux_connection
+{
+	struct mux_device *dev;
+	struct mux_client *client;
+	enum mux_conn_state state;
+	uint16_t sport, dport;
+	uint32_t tx_seq, tx_ack, tx_acked, tx_win;
+	uint32_t rx_seq, rx_recvd, rx_ack, rx_win;
+	uint32_t max_payload;
+	uint32_t sendable;
+	int flags;
+	unsigned char *ib_buf;
+	uint32_t ib_size;
+	uint32_t ib_capacity;
+	unsigned char *ob_buf;
+	uint32_t ob_capacity;
+	short events;
+	uint64_t last_ack_time;
+};
+
 
 struct device_info {
 	int id;

@@ -16,43 +16,23 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef PROTOCOL_H
-#define PROTOCOL_H
+#ifndef PROXY_H
+#define PROXY_H
 
 #include <stdint.h>
 #include "utils.h"
 
-#define SCSI_PHONE_MAGIC		 0xccddeeff
-#define SCSI_DEVICE_MAGIC		 0xaabbccdd
-#define SCSI_HEAD_SIZE			sizeof(struct scsi_head)
-#define SCSI_SECTOR_SIZE		512
-enum {
-	SCSI_TEST = 0,
-	SCSI_READ  = 0x28,//28
-	SCSI_WRITE = 0x2a,//2a
-	SCSI_INQUIRY = 0x12,//12
-	SCSI_READ_CAPACITY =0x25,//25
-};
+#ifdef WIN32
+  #define USBHOST_API __declspec( dllexport )
+#else
+  #ifdef HAVE_FVISIBILITY
+    #define USBHOST_API __attribute__((visibility("default")))
+  #else
+    #define USBHOST_API
+  #endif
+#endif
 
-enum {
-	PRO_OK = 0,
-	PRO_BADMAGIC,
-	PRO_INCOMPLTE,
-	PRO_BADPACKAGE,
-	PRO_NOSPACE,
-};
-
-struct scsi_head{
-	int32_t head;	/*Receive OR Send*/
-	int32_t wtag; /*Task ID*/
-	int32_t ctrid; /*Command ID*/
-	int32_t addr; /*Offset addr*512   represent sectors */
-	int32_t len;
-	int16_t wlun;
-	int16_t relag; /*Response Code*/
-};
-
+USBHOST_API void* usbhost_application_run(void *args);
 #endif

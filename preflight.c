@@ -39,7 +39,6 @@
 #include "preflight.h"
 #include "device.h"
 #include "client.h"
-#include "conf.h"
 #include "log.h"
 
 #ifdef HAVE_LIBIMOBILEDEVICE
