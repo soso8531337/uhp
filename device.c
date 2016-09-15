@@ -119,7 +119,7 @@ struct mux_device
 };
 
 static struct collection device_list;
-pthread_mutex_t device_list_mutex;
+static pthread_mutex_t device_list_mutex;
 
 static void update_connection(struct mux_connection *conn);
 
@@ -394,10 +394,14 @@ int device_start_connect(int device_id, uint16_t dport, struct mux_client *clien
 		conn->max_payload = USB_MTU;
 		conn->state = CONN_CONNECTED;
 		if(client_notify_connect(conn->client, RESULT_OK) < 0) {
-			conn->client = NULL;
+			//conn->client = NULL;			
+			conn->state = CONN_CONNECTING;
 			connection_teardown(conn);
 		}
 		update_connection(conn);
+		collection_add(&dev->connections, conn);
+		
+		return 1;
 	}else{
 		conn->max_payload = USB_MTU - sizeof(struct mux_header) - sizeof(struct tcphdr);
 		conn->state = CONN_CONNECTING;

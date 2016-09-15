@@ -25,7 +25,30 @@
 #include "usbmuxd-proto.h"
 
 struct device_info;
-struct mux_client;
+
+enum client_state {
+	CLIENT_COMMAND,		// waiting for command
+	CLIENT_LISTEN,		// listening for devices
+	CLIENT_CONNECTING1,	// issued connection request
+	CLIENT_CONNECTING2,	// connection established, but waiting for response message to get sent
+	CLIENT_CONNECTED,	// connected
+	CLIENT_DEAD
+};
+
+struct mux_client {
+	int fd;
+	unsigned char *ob_buf;
+	uint32_t ob_size;
+	uint32_t ob_capacity;
+	unsigned char *ib_buf;
+	uint32_t ib_size;
+	uint32_t ib_capacity;
+	short events, devents;
+	uint32_t connect_tag;
+	int connect_device;
+	enum client_state state;
+	uint32_t proto_version;
+};
 
 int client_read(struct mux_client *client, void *buffer, uint32_t len);
 int client_write(struct mux_client *client, void *buffer, uint32_t len);

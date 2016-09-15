@@ -93,3 +93,37 @@ void usbmuxd_log(enum loglevel level, const char *fmt, ...)
 
 	free(fs);
 }
+
+void usbproxy_log(enum loglevel level, const char *fmt, ...)
+{
+	va_list ap;
+	char *fs;
+	struct timeval ts;
+	struct tm *tp;
+
+	if(level > log_level)
+		return;
+
+	get_tick_count(&ts);
+	tp = localtime(&ts.tv_sec);
+
+	fs = malloc(40 + strlen(fmt));
+
+	if(log_syslog) {
+		sprintf(fs, "[%d] %s\n", level, fmt);
+	} else {
+		strftime(fs, 10, "[%H:%M:%S", tp);
+		sprintf(fs+9, ".%03d][%d][PROXY] %s\n", (int)(ts.tv_usec / 1000), level, fmt);
+	}
+
+	va_start(ap, fmt);
+	if (log_syslog) {
+		vsyslog(level_to_syslog_level(level), fs, ap);
+	} else {
+		vfprintf(stderr, fs, ap);
+	}
+	va_end(ap);
+
+	free(fs);
+}
+

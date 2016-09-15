@@ -43,15 +43,8 @@
 #define CMD_BUF_SIZE	0x10000
 #define REPLY_BUF_SIZE	0x10000
 
-enum client_state {
-	CLIENT_COMMAND,		// waiting for command
-	CLIENT_LISTEN,		// listening for devices
-	CLIENT_CONNECTING1,	// issued connection request
-	CLIENT_CONNECTING2,	// connection established, but waiting for response message to get sent
-	CLIENT_CONNECTED,	// connected
-	CLIENT_DEAD
-};
 
+/*
 struct mux_client {
 	int fd;
 	unsigned char *ob_buf;
@@ -66,7 +59,7 @@ struct mux_client {
 	enum client_state state;
 	uint32_t proto_version;
 };
-
+*/
 static struct collection client_list;
 pthread_mutex_t client_list_mutex;
 
@@ -353,9 +346,11 @@ static int send_device_list(struct mux_client *client, uint32_t tag)
 
 	count = device_get_list(0, &devs);
 	if(!count){
+		res = send_pkt(client, tag, MESSAGE_DEVICE_LIST,
+				NULL, 0);
 		if (devs)
 			free(devs);	
-		return 0;
+		return res;
 	}
 	dmsgs = calloc(1, count*sizeof(struct usbmuxd_device_record));
 	if(!dmsgs){
@@ -421,10 +416,15 @@ static int client_command(struct mux_client *client, struct usbmuxd_header *hdr)
 		case MESSAGE_CONNECT:
 			ch = (void*)hdr;
 			usbmuxd_log(LL_DEBUG, "Client %d connection request to device %d port %d", client->fd, ch->device_id, ntohs(ch->port));
+			/*Set Connect Tag to hdr Tag, device_start_conncet Can not set it szitman*/
+			client->connect_tag = hdr->tag;
 			res = device_start_connect(ch->device_id, ntohs(ch->port), client);
 			if(res < 0) {
+				client->connect_tag = 0;//set to default szitman
 				if(send_result(client, hdr->tag, -res) < 0)
 					return -1;
+			}else if(res == 1){
+				client->connect_device = ch->device_id;
 			}else{
 				client->connect_tag = hdr->tag;
 				client->connect_device = ch->device_id;
@@ -432,6 +432,8 @@ static int client_command(struct mux_client *client, struct usbmuxd_header *hdr)
 			}
 			return 0;
 		case MESSAGE_DEVICE_LIST:
+			usbmuxd_log(LL_DEBUG, "Client %d Send DEVICE LIST Request[Tag=%u Len=%u]", 
+				client->fd, hdr->tag, hdr->length);
 			return send_device_list(client, hdr->tag);
 		default:
 			usbmuxd_log(LL_ERROR, "Client %d invalid command %d", client->fd, hdr->message);

@@ -404,7 +404,7 @@ static int usb_switch_aoa(libusb_device* dev)
 			return -1;
 		}
 		if(acc_default.manufacturer) {
-			usbmuxd_log(LL_WARNING, "sending manufacturer: %s\n", acc_default.manufacturer);
+			usbmuxd_log(LL_WARNING, "sending manufacturer: %s", acc_default.manufacturer);
 			res = libusb_control_transfer(handle,
 						  LIBUSB_ENDPOINT_OUT
 						  | LIBUSB_REQUEST_TYPE_VENDOR,
@@ -419,7 +419,7 @@ static int usb_switch_aoa(libusb_device* dev)
 			}
 		}
 		if(acc_default.model) {
-			usbmuxd_log(LL_WARNING, "sending model: %s\n", acc_default.model);
+			usbmuxd_log(LL_WARNING, "sending model: %s", acc_default.model);
 			res = libusb_control_transfer(handle,
 						  LIBUSB_ENDPOINT_OUT
 						  | LIBUSB_REQUEST_TYPE_VENDOR,
@@ -434,7 +434,7 @@ static int usb_switch_aoa(libusb_device* dev)
 			}
 		}
 		
-		usbmuxd_log(LL_WARNING, "sending description: %s\n", acc_default.description);
+		usbmuxd_log(LL_WARNING, "sending description: %s", acc_default.description);
 		res = libusb_control_transfer(handle,
 					  LIBUSB_ENDPOINT_OUT
 					  | LIBUSB_REQUEST_TYPE_VENDOR,
@@ -447,7 +447,7 @@ static int usb_switch_aoa(libusb_device* dev)
 			libusb_close(handle);
 			return res;
 		}
-		usbmuxd_log(LL_WARNING, "sending version string: %s\n", acc_default.version);
+		usbmuxd_log(LL_WARNING, "sending version string: %s", acc_default.version);
 		res = libusb_control_transfer(handle,
 					  LIBUSB_ENDPOINT_OUT
 					  | LIBUSB_REQUEST_TYPE_VENDOR,
@@ -460,7 +460,7 @@ static int usb_switch_aoa(libusb_device* dev)
 			libusb_close(handle);
 			return res;
 		}
-		usbmuxd_log(LL_WARNING, "sending url string: %s\n", acc_default.url);
+		usbmuxd_log(LL_WARNING, "sending url string: %s", acc_default.url);
 		res = libusb_control_transfer(handle,
 					  LIBUSB_ENDPOINT_OUT
 					  | LIBUSB_REQUEST_TYPE_VENDOR,
@@ -473,7 +473,7 @@ static int usb_switch_aoa(libusb_device* dev)
 			libusb_close(handle);
 			return res;
 		}
-		usbmuxd_log(LL_WARNING, "sending serial number: %s\n", acc_default.serial);
+		usbmuxd_log(LL_WARNING, "sending serial number: %s", acc_default.serial);
 		res = libusb_control_transfer(handle,
 					  LIBUSB_ENDPOINT_OUT
 					  | LIBUSB_REQUEST_TYPE_VENDOR,
@@ -501,7 +501,7 @@ static int usb_switch_aoa(libusb_device* dev)
 	}	
 	
 	libusb_close(handle);
-	usbmuxd_log(LL_WARNING, "No Found Android Device in %d-%d", bus, address);
+	usbmuxd_log(LL_SPEW, "No Found Android Device in %d-%d", bus, address);
 
 	return -1;
 }
@@ -539,7 +539,7 @@ static int usb_device_add(libusb_device* dev)
 				devdesc.idVendor, devdesc.idProduct, bus, address);
 		usb_type = USB_ANDROID;
 	}else{
-		usbmuxd_log(LL_WARNING, "Try To Switch Android AOA Mode  v/p %04x:%04x at %d-%d", 
+		usbmuxd_log(LL_SPEW, "Try To Switch Android AOA Mode  v/p %04x:%04x at %d-%d", 
 					devdesc.idVendor, devdesc.idProduct, bus, address);
 		usb_switch_aoa(dev);
 		return -1;
