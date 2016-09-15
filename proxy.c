@@ -920,6 +920,12 @@ static void application_process_recv(struct app_client *client)
 		int copy_size, free_size;
 		free_size = client->ob_capacity-client->ob_size;
 		copy_size = client->ib_size> free_size?free_size:client->ib_size;
+		if(free_size == 0){
+			usbproxy_log(LL_INFO, "USBHOST Test Send Buffer is Full %dBytes", client->ob_size);
+			client->events |= POLLOUT;			
+			client->events &= ~POLLIN;
+			return;
+		}
 		if(client->ib_size > 1){
 			/* resoponse more than 1bytes*/
 			memcpy(client->ob_buf+client->ob_size, client->ib_buf,copy_size);
