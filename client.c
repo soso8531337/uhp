@@ -43,23 +43,6 @@
 #define CMD_BUF_SIZE	0x10000
 #define REPLY_BUF_SIZE	0x10000
 
-
-/*
-struct mux_client {
-	int fd;
-	unsigned char *ob_buf;
-	uint32_t ob_size;
-	uint32_t ob_capacity;
-	unsigned char *ib_buf;
-	uint32_t ib_size;
-	uint32_t ib_capacity;
-	short events, devents;
-	uint32_t connect_tag;
-	int connect_device;
-	enum client_state state;
-	uint32_t proto_version;
-};
-*/
 static struct collection client_list;
 pthread_mutex_t client_list_mutex;
 
@@ -384,7 +367,7 @@ static int send_device_list(struct mux_client *client, uint32_t tag)
 
 static int client_command(struct mux_client *client, struct usbmuxd_header *hdr)
 {
-	int res;
+	int res, aoa = 0;
 	usbmuxd_log(LL_DEBUG, "Client command in fd %d len %d ver %d msg %d tag %d", client->fd, hdr->length, hdr->version, hdr->message, hdr->tag);
 
 	if(client->state != CLIENT_COMMAND) {
@@ -402,7 +385,6 @@ static int client_command(struct mux_client *client, struct usbmuxd_header *hdr)
 	}
 
 	struct usbmuxd_connect_request *ch;
-	char *payload;
 
 	switch(hdr->message) {
 		case MESSAGE_PLIST:
@@ -416,19 +398,27 @@ static int client_command(struct mux_client *client, struct usbmuxd_header *hdr)
 		case MESSAGE_CONNECT:
 			ch = (void*)hdr;
 			usbmuxd_log(LL_DEBUG, "Client %d connection request to device %d port %d", client->fd, ch->device_id, ntohs(ch->port));
-			/*Set Connect Tag to hdr Tag, device_start_conncet Can not set it szitman*/
-			client->connect_tag = hdr->tag;
+			aoa = device_is_aoa(ch->device_id);
+			if(aoa == -1){
+				usbmuxd_log(LL_DEBUG, "Client %d connection request to device %d port %d But No Device", client->fd, ch->device_id, ntohs(ch->port));
+				if(send_result(client, hdr->tag, RESULT_BADDEV) < 0)
+					return -1;
+			}else if(aoa == 1){
+				/*Android AOA Device*/			
+				client->connect_tag = hdr->tag;
+				client->state = CLIENT_CONNECTING1;
+			}
 			res = device_start_connect(ch->device_id, ntohs(ch->port), client);
 			if(res < 0) {
 				client->connect_tag = 0;//set to default szitman
 				if(send_result(client, hdr->tag, -res) < 0)
 					return -1;
-			}else if(res == 1){
-				client->connect_device = ch->device_id;
 			}else{
 				client->connect_tag = hdr->tag;
 				client->connect_device = ch->device_id;
-				client->state = CLIENT_CONNECTING1;
+				if(!aoa){
+					client->state = CLIENT_CONNECTING1;
+				}
 			}
 			return 0;
 		case MESSAGE_DEVICE_LIST:

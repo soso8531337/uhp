@@ -54,12 +54,6 @@ enum mux_protocol {
 	MUX_PROTO_TCP = IPPROTO_TCP,
 };
 
-enum mux_dev_state {
-	MUXDEV_INIT,	// sent version packet
-	MUXDEV_ACTIVE,	// received version packet, active
-	MUXDEV_DEAD		// dead
-};
-
 struct mux_header
 {
 	uint32_t protocol;
@@ -80,43 +74,6 @@ struct mux_device;
 
 #define CONN_ACK_PENDING 1
 
-/*
-struct mux_connection
-{
-	struct mux_device *dev;
-	struct mux_client *client;
-	enum mux_conn_state state;
-	uint16_t sport, dport;
-	uint32_t tx_seq, tx_ack, tx_acked, tx_win;
-	uint32_t rx_seq, rx_recvd, rx_ack, rx_win;
-	uint32_t max_payload;
-	uint32_t sendable;
-	int flags;
-	unsigned char *ib_buf;
-	uint32_t ib_size;
-	uint32_t ib_capacity;
-	unsigned char *ob_buf;
-	uint32_t ob_capacity;
-	short events;
-	uint64_t last_ack_time;
-};
-*/
-
-struct mux_device
-{
-	struct usb_device *usbdev;
-	int id;
-	enum mux_dev_state state;
-	int visible;
-	struct collection connections;
-	uint16_t next_sport;
-	unsigned char *pktbuf;
-	uint32_t pktlen;
-	void *preflight_cb_data;
-	int version;
-	uint16_t rx_seq;
-	uint16_t tx_seq;
-};
 
 static struct collection device_list;
 static pthread_mutex_t device_list_mutex;
@@ -349,6 +306,20 @@ static void connection_teardown(struct mux_connection *conn)
 		free(conn->ob_buf);
 	collection_remove(&conn->dev->connections, conn);
 	free(conn);
+}
+
+int device_is_aoa(int device_id)
+{
+	struct mux_device *dev = get_mux_device_for_id(device_id);
+	
+	if(!dev) {
+		usbmuxd_log(LL_WARNING, "No Found device %d", device_id);
+		return -1;
+	}
+	if(dev->usbdev->type == USB_ANDROID){
+		return 1;
+	}
+	return 0;
 }
 
 int device_start_connect(int device_id, uint16_t dport, struct mux_client *client)

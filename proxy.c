@@ -840,7 +840,7 @@ static int application_command(struct app_client *client)
 	struct scsi_head scsi;
 	int res;
 	
-	usbproxy_log(LL_ERROR, "Receive %u/%uBytes-->%s", 
+	usbproxy_log(LL_ERROR, "Receive %u/%uBytes-->addr:%p", 
 			client->ib_size, client->ib_capacity, client->ib_buf);
 	/*Decode Protocol and wirte to block device*/
 	memset(&scsi, 0, sizeof(struct scsi_head));

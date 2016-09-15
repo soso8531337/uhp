@@ -189,7 +189,7 @@ static void tx_callback(struct libusb_transfer *xfer)
 static void tx_callback_aoa(struct libusb_transfer *xfer)
 {
 	struct mux_connection *conn= (struct mux_connection *)xfer->user_data;
-	struct usb_device *dev = conn->dev;
+	struct usb_device *dev = conn->dev->usbdev;
 	usbmuxd_log(LL_SPEW, "TX callback dev %d-%d len %d -> %d status %d", dev->bus, dev->address, xfer->length, xfer->actual_length, xfer->status);
 	if(xfer->status == LIBUSB_TRANSFER_COMPLETED){
 		conn->rx_ack += xfer->actual_length;
@@ -263,7 +263,7 @@ int usb_send_aoa(struct mux_connection *conn, const unsigned char *buf, int leng
 {
 	int res;
 	
-	struct usb_device *dev = conn->dev;
+	struct usb_device *dev = conn->dev->usbdev;
 	struct libusb_transfer *xfer = libusb_alloc_transfer(0);
 	libusb_fill_bulk_transfer(xfer, dev->dev, dev->ep_out, (void*)buf, length, tx_callback_aoa, conn, 0);
 	if((res = libusb_submit_transfer(xfer)) < 0) {

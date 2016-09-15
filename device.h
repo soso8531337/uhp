@@ -31,6 +31,28 @@ enum mux_conn_state {
 	CONN_DEAD			// being freed; used to prevent infinite recursion between client<->device freeing
 };
 
+enum mux_dev_state {
+	MUXDEV_INIT,	// sent version packet
+	MUXDEV_ACTIVE,	// received version packet, active
+	MUXDEV_DEAD		// dead
+};
+
+struct mux_device
+{
+	struct usb_device *usbdev;
+	int id;
+	enum mux_dev_state state;
+	int visible;
+	struct collection connections;
+	uint16_t next_sport;
+	unsigned char *pktbuf;
+	uint32_t pktlen;
+	void *preflight_cb_data;
+	int version;
+	uint16_t rx_seq;
+	uint16_t tx_seq;
+};
+
 struct mux_connection
 {
 	struct mux_device *dev;
@@ -50,7 +72,6 @@ struct mux_connection
 	short events;
 	uint64_t last_ack_time;
 };
-
 
 struct device_info {
 	int id;
@@ -81,5 +102,6 @@ void device_check_timeouts(void);
 void device_init(void);
 void device_kill_connections(void);
 void device_shutdown(void);
+int device_is_aoa(int device_id);
 
 #endif
