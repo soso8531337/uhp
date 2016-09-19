@@ -27,7 +27,8 @@
 enum fdowner {
 	FD_LISTEN,
 	FD_CLIENT,
-	FD_USB
+	FD_USB,
+	FD_PIPE
 };
 
 struct fdlist {

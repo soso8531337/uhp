@@ -29,12 +29,22 @@
 #define SCSI_DEVICE_MAGIC		 0xaabbccdd
 #define SCSI_HEAD_SIZE			sizeof(struct scsi_head)
 #define SCSI_SECTOR_SIZE		512
+
+enum{
+	EREAD = 1,
+	EWRITE=2,
+	ENODISK = 3
+};
+
+#define SCSI_WFLAG  1 << 7
 enum {
-	SCSI_TEST = 0,
-	SCSI_READ  = 0x28,//28
-	SCSI_WRITE = 0x2a,//2a
-	SCSI_INQUIRY = 0x12,//12
-	SCSI_READ_CAPACITY =0x25,//25
+  SCSI_TEST = 0,
+  SCSI_READ  = 1,//28
+  SCSI_WRITE = 2 | SCSI_WFLAG,//2a
+  SCSI_INQUIRY = 3,//12
+  SCSI_READ_CAPACITY =4,//25  
+  SCSI_DISK_REMOVE,
+  SCSI_DISK_ADD
 };
 
 enum {

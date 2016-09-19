@@ -63,16 +63,18 @@
 #include "protocol.h"
 #include "proxy.h"
 #include "log.h"
+#include "storage.h"
 
-#define USBHOST_PORT		8080
+//#define USBHOST_PORT		8080
+#define USBHOST_PORT		5555
+
 #define USBHOST_NBUF_SIZE		262144
-#define USBHOST_POLL_TIMER		(2*1000) /*2s*/
-#define USBHOST_STORAGE			64
+#define USBHOST_POLL_TIMER		(1*1000) /*1s*/
+
 struct app_client{
 	struct usbmuxd_device_record devinfo;
 	int connected;
 	int commufd; /*Comunication socket fd*/
-	char storage[USBHOST_STORAGE];
 	unsigned char *ib_buf;
 	uint32_t ib_size;
 	uint32_t ib_capacity;
@@ -100,6 +102,7 @@ pthread_mutex_t app_mutex;
 static struct collection device_list;
 static struct app_config app_proxy;
 static volatile int use_tag = 0;
+static int stor_pipe[2];
 
 /**
  * Creates a socket connection to usbmuxd.
@@ -292,24 +295,29 @@ static int send_connect_packet(int sfd, uint32_t tag, uint32_t device_id, uint16
 	return send_packet(sfd, MESSAGE_CONNECT, tag, &conninfo, sizeof(conninfo));
 }
 
-static int storage_write(struct scsi_head *scsi, char *dev, unsigned char *payload)
+static int storage_write(struct scsi_head *scsi, unsigned char *payload)
 {
 	int wlen, fd, already = 0, res;
 	off_t offset;
+	char devname[512] = {0};
 	
-	if(!scsi || !payload || !dev){
+	if(!scsi || !payload){
 		return -1;
 	}
 	wlen = scsi->len;
 	offset = scsi->addr *SCSI_SECTOR_SIZE;
-
-	fd = open(dev, O_RDWR);
+	
+	if(storage_find(scsi->wlun, devname, sizeof(devname)-1) != 1){
+		usbproxy_log(LL_ERROR, "No Found Devname: %d", scsi->wlun);
+		return -1;
+	}
+	fd = open(devname, O_RDWR);
 	if(fd < 0){
-		usbproxy_log(LL_ERROR, "Open %s Error:%s", dev, strerror(errno));
+		usbproxy_log(LL_ERROR, "Open %s Error:%s", devname, strerror(errno));
 		return -1;
 	}
 	if(lseek(fd, offset, SEEK_SET) < 0){
-		usbproxy_log(LL_ERROR, "Lseek %s Error:%s", dev, strerror(errno));
+		usbproxy_log(LL_ERROR, "Lseek %s Error:%s", devname, strerror(errno));
 		close(fd);
 		return -1;
 	}
@@ -320,37 +328,43 @@ static int storage_write(struct scsi_head *scsi, char *dev, unsigned char *paylo
 					errno ==  EAGAIN){
 				continue;
 			}
-			usbproxy_log(LL_ERROR, "Wrie %s Error:%s", dev, strerror(errno));
+			usbproxy_log(LL_ERROR, "Wrie %s Error:%s", devname, strerror(errno));
 			close(fd);
 			return -1;
 		}
 		already += res;
 	} while (already < wlen);
-
 	close(fd);
+	usbproxy_log(LL_ERROR, "Write Finish:wtag=%d\nctrid=%d\naddr=%d\nlen=%d\nwlun=%d",  
+			 scsi->wtag, scsi->ctrid, scsi->addr, scsi->len, scsi->wlun);
 
 	return wlen;
 }
 
 static int storage_read(struct scsi_head *scsi, struct app_client *client)
 {
-	int wlen, fd, already = 0, res, total = 0;
+	int wlen, fd, already = 0, res, total = 0, paylen = 0;
 	off_t offset;
 	char *payload = NULL;
+	char devname[512] = {0};
 	
 	if(!scsi || !client){
 		return -1;
 	}
 	wlen = scsi->len;
 	offset = scsi->addr *SCSI_SECTOR_SIZE;
+	if(storage_find(scsi->wlun, devname, sizeof(devname)-1) != 1){
+		usbproxy_log(LL_ERROR, "No Found Devname: %d", scsi->wlun);
+		return -1;
+	}
 
-	fd = open(client->storage, O_RDWR);
+	fd = open(devname, O_RDWR);
 	if(fd < 0){
-		usbproxy_log(LL_ERROR, "Open %s Error:%s", client->storage, strerror(errno));
+		usbproxy_log(LL_ERROR, "Open %s Error:%s", devname, strerror(errno));
 		return -1;
 	}
 	if(lseek(fd, offset, SEEK_SET) < 0){
-		usbproxy_log(LL_ERROR, "Lseek %s Error:%s", client->storage, strerror(errno));
+		usbproxy_log(LL_ERROR, "Lseek %s Error:%s", devname, strerror(errno));
 		close(fd);
 		return -1;
 	}
@@ -361,30 +375,50 @@ static int storage_read(struct scsi_head *scsi, struct app_client *client)
 		close(fd);
 		return -1;
 	}
+	usbproxy_log(LL_ERROR, "Read begin:wtag=%d\nctrid=%d\naddr=%d\nlen=%d\nwlun=%d",  
+			 scsi->wtag, scsi->ctrid, scsi->addr, scsi->len, scsi->wlun);	
 	/*copy header*/
 	memcpy(payload, scsi, sizeof(struct scsi_head));
 	already += SCSI_HEAD_SIZE;
+	paylen = 0;
 	do {
-		res  = read(fd, payload + already, wlen - already);
+		res  = read(fd, payload + already, wlen - paylen);
 		if (res < 0) {
 			if(errno ==  EINTR ||
 					errno ==  EAGAIN){
 				continue;
 			}
-			usbproxy_log(LL_ERROR, "Read %s Error:%s", client->storage, strerror(errno));
+			usbproxy_log(LL_ERROR, "Read %s Error:%s",devname, strerror(errno));
 			free(payload);
 			close(fd);
 			return -1;
 		}
 		already += res;
+		paylen += res;
 	} while (already < total);
 	close(fd);
 	memcpy(client->ob_buf+client->ob_size, payload, total);
 	client->ob_size += total;
+	usbproxy_log(LL_ERROR, "Read Finish:wtag=%d\nctrid=%d\naddr=%d\nlen=%d\nwlun=%d",  
+			 scsi->wtag, scsi->ctrid, scsi->addr, scsi->len, scsi->wlun);
 	
 	return total;
 }
 
+static int storage_operation_result(struct scsi_head *scsi, struct app_client *client)
+{
+	if(!scsi || !client){
+		return -1;
+	}
+	if(client->ob_size +SCSI_HEAD_SIZE > client->ob_capacity){
+		usbproxy_log(LL_ERROR, "Out Buffer Is Not Enough");
+		return -1;
+	}
+	memcpy(client->ob_buf+client->ob_size, (void*)scsi, SCSI_HEAD_SIZE);
+	client->ob_size += SCSI_HEAD_SIZE;
+	client->events |= POLLOUT;
+	return 0;
+}
 static int usbhost_get_tag(void)
 {
 	if(use_tag == 0x7FFFFFFF){
@@ -439,6 +473,16 @@ USBHOST_API int usbhost_get_device_list(int sockfd)
 			dev = (struct usbmuxd_device_record *)(response+curlen);
 			if(dev->padding != USBHOST_DPADDING_MAGIC){
 				usbproxy_log(LL_DEBUG, "Magic Mismatch-->0x%2x", dev->padding);
+				curlen += sizeof(struct usbmuxd_device_record);
+				continue;
+			}
+			if(dev->device_id == USB_MASS_STOR_DEVID){
+				usbproxy_log(LL_DEBUG, "Storage Device ADD %u", dev->location);
+				struct storage_action action;
+				action.action = STOR_ADD;
+				action.location = dev->location;
+				storage_action_handle(&action, NULL);				
+				curlen += sizeof(struct usbmuxd_device_record);
 				continue;
 			}
 			client = calloc(1, sizeof(struct app_client));
@@ -680,6 +724,46 @@ USBHOST_API int usbhost_socket_recv(int sfd, char *data, uint32_t len, uint32_t 
 	return usbhost_recv_timeout(sfd, data, len, recv_bytes, 5000);
 }
 
+/*storage add or remove notify to peer*/
+void storage_callbakck(int action, int diskid)
+{
+#define STOR_PAYLOAD		4
+	struct scsi_head header;
+
+	pthread_mutex_lock(&app_mutex);
+	FOREACH(struct app_client *lc, app_proxy.device) {
+		if(lc->connected == APP_NOCONNECT){
+			/*Notify to peer*/
+			header.head = SCSI_DEVICE_MAGIC;
+			if(action == STOR_ADD){
+				header.ctrid = SCSI_DISK_ADD;
+			}else{
+				header.ctrid = SCSI_DISK_REMOVE;
+			}
+			srand( (unsigned)time( NULL ));
+			header.wtag = rand();
+			header.len = STOR_PAYLOAD;
+			if(lc->ob_size+STOR_PAYLOAD+SCSI_HEAD_SIZE > lc->ob_capacity){
+				usbproxy_log(LL_DEBUG, "Warning: Buffer Not enough [%d/%d]", 
+						lc->ob_size, lc->ob_capacity);
+				continue;
+			}
+#ifdef RELEASE
+			memcpy(lc->ob_buf+lc->ob_size, &header, SCSI_HEAD_SIZE);
+			lc->ob_size += SCSI_HEAD_SIZE;
+			memcpy(lc->ob_buf+lc->ob_size, &diskid, STOR_PAYLOAD);
+			lc->ob_size += STOR_PAYLOAD;
+#else
+			char buf[256] = {0};
+			sprintf(buf, "Storage: Aciton=%d ID=%d", action, diskid);
+			memcpy(lc->ob_buf+lc->ob_size, buf,  strlen(buf));
+			lc->ob_size += strlen(buf);			
+#endif
+			lc->events |= POLLOUT;
+		}
+	} ENDFOREACH
+	pthread_mutex_unlock(&app_mutex);
+}
 /**
  * Waits for an event to occur, i.e. a packet coming from usbmuxd.
  * Calls generate_event to pass the event via callback to the client program.
@@ -710,6 +794,19 @@ static int monitor_event(int sfd)
 			}			
 			return 0;
 		}
+		if(dev->device_id == USB_MASS_STOR_DEVID){
+			struct storage_action action;
+			action.action = STOR_ADD;
+			action.location = dev->location;
+			if(app_proxy.connected == 1){
+				write(stor_pipe[1], &action, sizeof(action));
+			}
+			usbproxy_log(LL_DEBUG, "Notify Add Storage %d", dev->location);
+			if(payload){
+				free(payload);
+			}			
+			return 0;			
+		}
 		if(usbhost_check_device_by_udid(dev->device_id) == 1){
 			if(payload){
 				free(payload);
@@ -735,9 +832,17 @@ static int monitor_event(int sfd)
 		pthread_mutex_unlock(&app_mutex);
 	} else if (hdr.message == MESSAGE_DEVICE_REMOVE) {
 		uint32_t handle;
-
 		memcpy(&handle, payload, sizeof(uint32_t));
 		usbhost_dead_device_by_udid(handle);
+	}else if(hdr.message == MESSAGE_DEVICE_REMOVE_STOR){
+		struct storage_action action;
+		action.action = STOR_REM;
+
+		memcpy(&action.location, payload, sizeof(uint32_t));		
+		if(app_proxy.connected == 1){
+			write(stor_pipe[1], &action, sizeof(action));
+		}	
+		usbproxy_log(LL_DEBUG, "Notify Remove Storage %d", action.location);
 	}else if(hdr.length > 0) {
 		usbproxy_log(LL_DEBUG, "Unexpected message type %d length %d received!",hdr.message, hdr.length);
 	}
@@ -830,6 +935,8 @@ static int protocol_decode(struct app_client *client, struct scsi_head *scsi)
 			return PRO_NOSPACE;
 		}
 	}
+	
+	memcpy(scsi, shder, sizeof(struct scsi_head));
 	return PRO_OK;
 }
 
@@ -866,26 +973,40 @@ static int application_command(struct app_client *client)
 		case SCSI_READ:
 			handled = storage_read(&scsi, client);
 			if(handled < 0){
-				return -1;
-			}
-			client->events |= POLLOUT;
+				/*Send to peer notify read failed*/
+				scsi.relag = EREAD;
+				scsi.head = SCSI_DEVICE_MAGIC;
+				storage_operation_result(&scsi, client);				
+				handled = 0;
+			}else if(handled > 0){
+				client->events |= POLLOUT;
+			}			
+			bytes = SCSI_HEAD_SIZE;
 			break;
 		case SCSI_WRITE:
-			handled = storage_write(&scsi, client->storage, client->ib_buf+SCSI_HEAD_SIZE);
+			handled = storage_write(&scsi, client->ib_buf+SCSI_HEAD_SIZE);
 			if(handled < 0){
-				return -1;
-			}
-			/*Write Finish*/		
-			client->events |= POLLIN;
+				/*Send to peer notify write failed*/
+				scsi.relag = EWRITE;
+				scsi.head = SCSI_DEVICE_MAGIC;
+				handled = 0;
+			}else if(handled > 0){
+				/*Write Finish*/		
+				client->events |= POLLIN;
+			}			
+			bytes = SCSI_HEAD_SIZE+scsi.len;
+			storage_operation_result(&scsi, client);
 			break;
 		case SCSI_TEST:
 		default:
-			handled = 0;
+			handled = 0;			
+			bytes = SCSI_HEAD_SIZE;
 			usbproxy_log(LL_ERROR, "Unhandle SCSI Type-->%d",  scsi.ctrid);
 	}
 	/*Offset Buffer*/
-	bytes = SCSI_HEAD_SIZE+scsi.len;
 	client->ib_size -= bytes;
+	usbproxy_log(LL_ERROR, "Application Handle Finish:\nwtag=%d\nctrid=%d\naddr=%d\nlen=%d\nwlun=%d\nSkip Next:SkipLen:%d\nCntLen:%d",  
+			 scsi.wtag, scsi.ctrid, scsi.addr, scsi.len, scsi.wlun, bytes, client->ib_size);	
 	memmove(client->ib_buf, client->ib_buf + bytes, client->ib_size);	
 	/*Encode Buffer and Send To peer*/
 	return handled;
@@ -961,6 +1082,24 @@ static void application_process_send(struct app_client *client)
 		client->events |= POLLOUT;
 		memmove(client->ob_buf, client->ob_buf + res, client->ob_size);
 	}
+}
+
+static void application_layer_storage(int fd, short events)
+{
+	struct storage_action action;
+	int res;
+	
+	res = read(fd, &action, sizeof(action));
+	if(res <= 0) {
+		if(res < 0)
+			usbproxy_log(LL_ERROR, "Receive from client fd %d failed: %s", fd, strerror(errno));
+		else
+			usbproxy_log(LL_INFO, "Client %d connection closed", fd);
+		return;
+	}
+	usbproxy_log(LL_INFO, "%s Storage %d", 
+			action.action== STOR_ADD?"Add":"Remove", action.location);
+	storage_action_handle(&action, storage_callbakck);
 }
 
 static void application_layer_process(int fd, short events)
@@ -1043,6 +1182,9 @@ static int application_layer_loop()
 		/*Poll Request*/		
 		fdlist_reset(&pollfds);
 		usbhost_client_fds(&pollfds);
+		/*Add storage pipe*/		
+		fdlist_add(&pollfds, FD_PIPE, stor_pipe[0], POLLIN);
+		
 		tspec.tv_sec = USBHOST_POLL_TIMER / 1000;
 		tspec.tv_nsec = (USBHOST_POLL_TIMER % 1000) * 1000000;
 		cnt = ppoll(pollfds.fds, pollfds.count, &tspec, &empty_sigset);
@@ -1058,11 +1200,13 @@ static int application_layer_loop()
 			usbhost_device_shutdown(0);
 		} else {
 			for(i=0; i<pollfds.count; i++) {
-				if(pollfds.fds[i].revents && pollfds.owners[i] == FD_CLIENT) {
-						application_layer_process(pollfds.fds[i].fd, pollfds.fds[i].revents);
-				}
+				if(pollfds.fds[i].revents && pollfds.owners[i] == FD_PIPE){
+					application_layer_storage(pollfds.fds[i].fd, pollfds.fds[i].revents);
+				}else if(pollfds.fds[i].revents && pollfds.owners[i] == FD_CLIENT) {
+					application_layer_process(pollfds.fds[i].fd, pollfds.fds[i].revents);
+				} 
 			}
-		}
+		}		
 	}	
 	fdlist_free(&pollfds);
 
@@ -1103,6 +1247,11 @@ USBHOST_API void usbhost_application_init(void)
 	app_proxy.device = &device_list;
 	app_proxy.listenfd = -1;	
 	app_proxy.connected = 0;
+	
+	if(pipe(stor_pipe) < 0) {
+		usbmuxd_log(LL_FATAL, "pipe() failed.");
+	}
+	storage_init();
 }
 
 USBHOST_API void* usbhost_application_run(void *args)

@@ -84,8 +84,9 @@ struct device_info {
 void device_data_input(struct usb_device *dev, unsigned char *buf, uint32_t length);
 
 int device_add(struct usb_device *dev);
+int device_add_storage(struct usb_device *usbdev);
 void device_remove(struct usb_device *dev);
-
+void device_remove_storage(struct usb_device *dev);
 int device_start_connect(int device_id, uint16_t port, struct mux_client *client);
 void device_client_process(int device_id, struct mux_client *client, short events);
 void device_abort_connect(int device_id, struct mux_client *client);
