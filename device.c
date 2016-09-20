@@ -853,36 +853,6 @@ void device_data_input(struct usb_device *usbdev, unsigned char *buffer, uint32_
 
 }
 
-int device_add_storage(struct usb_device *usbdev)
-{
-	struct device_info info;
-	struct mux_device *dev;
-
-	dev = malloc(sizeof(struct mux_device));
-	dev->id = USB_MASS_STOR_DEVID;
-	dev->usbdev = usbdev;
-	dev->next_sport = 1;
-	dev->pktbuf = NULL;
-	dev->pktlen = 0;
-	dev->preflight_cb_data = NULL;
-	dev->version = 0;
-	dev->state = MUXDEV_ACTIVE;
-	
-	collection_init(&dev->connections);
-	pthread_mutex_lock(&device_list_mutex);
-	collection_add(&device_list, dev);
-	pthread_mutex_unlock(&device_list_mutex);
-
-	info.id = USB_MASS_STOR_DEVID;
-	info.location = usb_get_location(usbdev);
-	info.serial = usb_get_serial(usbdev);
-	info.pid = usb_get_pid(usbdev);
-	info.speed = usb_get_speed(usbdev);
-	preflight_worker_device_add(&info);
-
-	return 0;
-}
-
 int device_add(struct usb_device *usbdev)
 {
 	int res;
@@ -932,27 +902,6 @@ int device_add(struct usb_device *usbdev)
 	collection_add(&device_list, dev);
 	pthread_mutex_unlock(&device_list_mutex);
 	return 0;
-}
-
-void device_remove_storage(struct usb_device *usbdev)
-{
-	pthread_mutex_lock(&device_list_mutex);
-	FOREACH(struct mux_device *dev, &device_list) {
-		if(dev->usbdev == usbdev) {
-			usbmuxd_log(LL_NOTICE, "Removed Storage device %d on location 0x%x", dev->id, usb_get_location(usbdev));
-			client_device_remove_stor(usb_get_location(usbdev));
-			if(dev->state == MUXDEV_ACTIVE) {
-				dev->state = MUXDEV_DEAD;
-				collection_free(&dev->connections);
-			}
-			collection_remove(&device_list, dev);
-			pthread_mutex_unlock(&device_list_mutex);
-			free(dev);
-			return;
-		}
-	} ENDFOREACH
-	pthread_mutex_unlock(&device_list_mutex);
-
 }
 
 void device_remove(struct usb_device *usbdev)

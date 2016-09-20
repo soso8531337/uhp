@@ -31,11 +31,6 @@
 #define INTERFACE_SUBCLASS 254
 #define INTERFACE_PROTOCOL 2
 
-#define MSS_CLASS		8
-#define MSS_SUBCLASS	6
-#define MSS_PROTOCOL	50
-
-#define MSS_DEFAULT_SERIAL		"0123456789abcdefgh"
 // libusb fragments packets larger than this (usbfs limitation)
 // on input, this creates race conditions and other issues
 #define USB_MRU 16384

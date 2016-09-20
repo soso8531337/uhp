@@ -296,15 +296,6 @@ static int notify_device_remove(struct mux_client *client, uint32_t device_id)
 	return res;
 }
 
-static int notify_device_remove_stor(struct mux_client *client, uint32_t location)
-{
-	int res = -1;
-	/* binary packet */
-	res = send_pkt(client, 0, MESSAGE_DEVICE_REMOVE_STOR, &location, sizeof(uint32_t));
-
-	return res;
-}
-
 static int start_listen(struct mux_client *client)
 {
 	struct device_info *devs = NULL;
@@ -574,18 +565,6 @@ void client_device_remove(int device_id)
 	FOREACH(struct mux_client *client, &client_list) {
 		if(client->state == CLIENT_LISTEN)
 			notify_device_remove(client, id);
-	} ENDFOREACH
-	pthread_mutex_unlock(&client_list_mutex);
-}
-
-void client_device_remove_stor(int location)
-{
-	pthread_mutex_lock(&client_list_mutex);
-	uint32_t id = location;
-	usbmuxd_log(LL_DEBUG, "Storage client_device_remove: Location %d", location);
-	FOREACH(struct mux_client *client, &client_list) {
-		if(client->state == CLIENT_LISTEN)
-			notify_device_remove_stor(client, id);
 	} ENDFOREACH
 	pthread_mutex_unlock(&client_list_mutex);
 }

@@ -94,13 +94,6 @@ static int devlist_failures;
 static int device_polling;
 static int device_hotplug = 1;
 
-static void usb_disconnect_storage(struct usb_device *dev)
-{
-	libusb_close(dev->dev);
-	dev->dev = NULL;
-	collection_remove(&device_list, dev);
-	free(dev);
-}
 static void usb_disconnect(struct usb_device *dev)
 {
 	if(!dev->dev) {
@@ -144,13 +137,8 @@ static void usb_disconnect(struct usb_device *dev)
 static void reap_dead_devices(void) {
 	FOREACH(struct usb_device *usbdev, &device_list) {
 		if(!usbdev->alive) {
-			if(usbdev->type == USB_STORAGE){
-				device_remove_storage(usbdev);
-				usb_disconnect_storage(usbdev);
-			}else{
-				device_remove(usbdev);
-				usb_disconnect(usbdev);
-			}
+			device_remove(usbdev);
+			usb_disconnect(usbdev);
 		}
 	} ENDFOREACH
 }
@@ -402,7 +390,7 @@ static int usb_switch_aoa(libusb_device* dev)
 					      AOA_GET_PROTOCOL, 0, 0, version,
 					      sizeof(version), 0);
 		if (res < 0) {
-			usbmuxd_log(LL_WARNING, "Could not getting AOA protocol %d-%d: %d", bus, address, res);
+			usbmuxd_log(LL_SPEW, "Could not getting AOA protocol %d-%d: %d", bus, address, res);
 			libusb_close(handle);
 			return res;
 		}else{
@@ -411,7 +399,7 @@ static int usb_switch_aoa(libusb_device* dev)
 		}
 		/* In case of a no_app accessory, the version must be >= 2 */
 		if((acc_default.aoa_version < 2) && !acc_default.manufacturer) {
-			usbmuxd_log(LL_WARNING, "Connecting without an Android App only for AOA 2.0[%d-%d]", bus,address);
+			usbmuxd_log(LL_SPEW, "Connecting without an Android App only for AOA 2.0[%d-%d]", bus,address);
 			libusb_close(handle);
 			return -1;
 		}
@@ -518,90 +506,6 @@ static int usb_switch_aoa(libusb_device* dev)
 	return -1;
 }
 
-static int usb_device_add_mass_storage(libusb_device* dev)
-{
-	int j, res;
-	// the following are non-blocking operations on the device list
-	uint8_t bus = libusb_get_bus_number(dev);
-	uint8_t address = libusb_get_device_address(dev);
-	struct libusb_config_descriptor *config;	
-	struct libusb_device_descriptor devdesc;
-	libusb_device_handle *handle;
-
-	if((res = libusb_get_device_descriptor(dev, &devdesc)) != 0) {
-		usbmuxd_log(LL_WARNING, "Could not get device descriptor for device %d-%d: %d", bus, address, res);
-		return -1;
-	}	
-	if((res = libusb_get_active_config_descriptor(dev, &config)) != 0) {
-		usbmuxd_log(LL_WARNING, "Could not get configuration descriptor for device %d-%d: %d", bus, address, res);
-		return -1;
-	}
-	if(config->bNumInterfaces != 1){
-		usbmuxd_log(LL_INFO, "Interface Num is mismatch [%d]", config->bNumInterfaces);
-		return -1;
-	}
-
-	struct usb_device *usbdev;
-	usbdev = malloc(sizeof(struct usb_device));
-	memset(usbdev, 0, sizeof(*usbdev));
-
-	for(j=0; j<config->bNumInterfaces; j++) {
-		const struct libusb_interface_descriptor *intf = &config->interface[j].altsetting[0];
-		if(intf->bInterfaceClass != MSS_CLASS ||
-			   intf->bInterfaceSubClass != MSS_SUBCLASS ||
-			   intf->bInterfaceProtocol != MSS_PROTOCOL){
-		}
-		if(intf->bNumEndpoints != 2) {
-			usbmuxd_log(LL_FLOOD, "Endpoint count mismatch for interface %d of device %d-%d", intf->bInterfaceNumber, bus, address);
-			continue;
-		}
-		if((intf->endpoint[0].bEndpointAddress & 0x80) == LIBUSB_ENDPOINT_OUT &&
-		   (intf->endpoint[1].bEndpointAddress & 0x80) == LIBUSB_ENDPOINT_IN) {
-			usbdev->interface = intf->bInterfaceNumber;
-			usbdev->ep_out = intf->endpoint[0].bEndpointAddress;
-			usbdev->ep_in = intf->endpoint[1].bEndpointAddress;
-			usbmuxd_log(LL_INFO, "Found interface %d with endpoints %02x/%02x for device %d-%d", usbdev->interface, usbdev->ep_out, usbdev->ep_in, bus, address);
-			break;
-		} else if((intf->endpoint[1].bEndpointAddress & 0x80) == LIBUSB_ENDPOINT_OUT &&
-		          (intf->endpoint[0].bEndpointAddress & 0x80) == LIBUSB_ENDPOINT_IN) {
-			usbdev->interface = intf->bInterfaceNumber;
-			usbdev->ep_out = intf->endpoint[1].bEndpointAddress;
-			usbdev->ep_in = intf->endpoint[0].bEndpointAddress;
-			usbmuxd_log(LL_INFO, "Found interface %d with swapped endpoints %02x/%02x for device %d-%d", usbdev->interface, usbdev->ep_out, usbdev->ep_in, bus, address);
-			break;
-		} else {
-			usbmuxd_log(LL_WARNING, "Endpoint type mismatch for interface %d of device %d-%d", intf->bInterfaceNumber, bus, address);
-		}
-	}	
-	if(j == config->bNumInterfaces) {
-		usbmuxd_log(LL_FLOOD, "Could not find a suitable USB interface for device %d-%d", bus, address);
-		libusb_free_config_descriptor(config);
-		free(usbdev);
-		return -1;
-	}
-	libusb_free_config_descriptor(config);	
-
-	if((res = libusb_open(dev, &handle)) != 0) {
-		usbmuxd_log(LL_WARNING, "Could not open device %d-%d: %d", bus, address, res);
-		return -1;
-	}	
-	strcpy(usbdev->serial, MSS_DEFAULT_SERIAL);
-	usbdev->bus = bus;
-	usbdev->address = address;
-	usbdev->vid = devdesc.idVendor;
-	usbdev->pid = devdesc.idProduct;
-	usbdev->speed = 480000000;
-	usbdev->dev = handle;
-	usbdev->alive = 1;	
-	usbdev->type = USB_STORAGE;
-	usbdev->wMaxPacketSize = 64;
-
-	collection_add(&device_list, usbdev);
-	device_add_storage(usbdev);
-
-	return 0;
-}
-
 static int usb_device_add(libusb_device* dev)
 {
 	int j, res;
@@ -623,11 +527,6 @@ static int usb_device_add(libusb_device* dev)
 	if((res = libusb_get_device_descriptor(dev, &devdesc)) != 0) {
 		usbmuxd_log(LL_WARNING, "Could not get device descriptor for device %d-%d: %d", bus, address, res);
 		return -1;
-	}
-	/*check device is usb mass storage*/
-	if(usb_device_add_mass_storage(dev) == 0){
-
-		return 0;
 	}
 	if(devdesc.idVendor == VID_APPLE &&
 		(devdesc.idProduct >= PID_RANGE_LOW && devdesc.idProduct <= PID_RANGE_MAX)){

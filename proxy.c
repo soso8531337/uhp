@@ -70,7 +70,7 @@
 
 #define USBHOST_NBUF_SIZE		262144
 #define USBHOST_POLL_TIMER		(1*1000) /*1s*/
-
+#define USBHOST_STORAGE			64
 struct app_client{
 	struct usbmuxd_device_record devinfo;
 	int connected;
@@ -87,7 +87,7 @@ struct app_client{
 struct app_config{
 	struct collection *device;
 	int listenfd;
-	int  connected;
+	int  storfd;
 	pthread_t monitor;
 };
 
@@ -102,7 +102,6 @@ pthread_mutex_t app_mutex;
 static struct collection device_list;
 static struct app_config app_proxy;
 static volatile int use_tag = 0;
-static int stor_pipe[2];
 
 /**
  * Creates a socket connection to usbmuxd.
@@ -295,7 +294,7 @@ static int send_connect_packet(int sfd, uint32_t tag, uint32_t device_id, uint16
 	return send_packet(sfd, MESSAGE_CONNECT, tag, &conninfo, sizeof(conninfo));
 }
 
-static int storage_write(struct scsi_head *scsi, unsigned char *payload)
+static int storage_write(struct scsi_head *scsi,  unsigned char *payload)
 {
 	int wlen, fd, already = 0, res;
 	off_t offset;
@@ -306,11 +305,12 @@ static int storage_write(struct scsi_head *scsi, unsigned char *payload)
 	}
 	wlen = scsi->len;
 	offset = scsi->addr *SCSI_SECTOR_SIZE;
-	
+
 	if(storage_find(scsi->wlun, devname, sizeof(devname)-1) != 1){
 		usbproxy_log(LL_ERROR, "No Found Devname: %d", scsi->wlun);
 		return -1;
 	}
+
 	fd = open(devname, O_RDWR);
 	if(fd < 0){
 		usbproxy_log(LL_ERROR, "Open %s Error:%s", devname, strerror(errno));
@@ -334,6 +334,7 @@ static int storage_write(struct scsi_head *scsi, unsigned char *payload)
 		}
 		already += res;
 	} while (already < wlen);
+
 	close(fd);
 	usbproxy_log(LL_ERROR, "Write Finish:wtag=%d\nctrid=%d\naddr=%d\nlen=%d\nwlun=%d",  
 			 scsi->wtag, scsi->ctrid, scsi->addr, scsi->len, scsi->wlun);
@@ -438,7 +439,6 @@ static void application_connection_setdown(struct app_client *client)
 	socket_close(client->commufd);
 	pthread_mutex_unlock(&app_mutex);
 	usbproxy_log(LL_ERROR, "TearDown Socket %d", client->commufd);	
-	app_proxy.connected = 0;
 }
 
 USBHOST_API int usbhost_get_device_list(int sockfd)
@@ -473,15 +473,6 @@ USBHOST_API int usbhost_get_device_list(int sockfd)
 			dev = (struct usbmuxd_device_record *)(response+curlen);
 			if(dev->padding != USBHOST_DPADDING_MAGIC){
 				usbproxy_log(LL_DEBUG, "Magic Mismatch-->0x%2x", dev->padding);
-				curlen += sizeof(struct usbmuxd_device_record);
-				continue;
-			}
-			if(dev->device_id == USB_MASS_STOR_DEVID){
-				usbproxy_log(LL_DEBUG, "Storage Device ADD %u", dev->location);
-				struct storage_action action;
-				action.action = STOR_ADD;
-				action.location = dev->location;
-				storage_action_handle(&action, NULL);				
 				curlen += sizeof(struct usbmuxd_device_record);
 				continue;
 			}
@@ -562,7 +553,7 @@ USBHOST_API int usbhost_init_device_by_udid(uint32_t handle, int confd)
 	pthread_mutex_lock(&app_mutex);
 	FOREACH(struct app_client *dev, &device_list) {
 		if(dev->devinfo.device_id == handle){
-			usbproxy_log(LL_NOTICE, "Set device INIT %d", dev->devinfo.device_id);
+			usbproxy_log(LL_NOTICE, "Set device[%d] INIT ", dev->devinfo.device_id);
 			dev->connected = APP_CONNECTED;
 			dev->commufd = confd;
 			dev->ob_buf = malloc(USBHOST_NBUF_SIZE);
@@ -794,19 +785,6 @@ static int monitor_event(int sfd)
 			}			
 			return 0;
 		}
-		if(dev->device_id == USB_MASS_STOR_DEVID){
-			struct storage_action action;
-			action.action = STOR_ADD;
-			action.location = dev->location;
-			if(app_proxy.connected == 1){
-				write(stor_pipe[1], &action, sizeof(action));
-			}
-			usbproxy_log(LL_DEBUG, "Notify Add Storage %d", dev->location);
-			if(payload){
-				free(payload);
-			}			
-			return 0;			
-		}
 		if(usbhost_check_device_by_udid(dev->device_id) == 1){
 			if(payload){
 				free(payload);
@@ -832,17 +810,9 @@ static int monitor_event(int sfd)
 		pthread_mutex_unlock(&app_mutex);
 	} else if (hdr.message == MESSAGE_DEVICE_REMOVE) {
 		uint32_t handle;
+
 		memcpy(&handle, payload, sizeof(uint32_t));
 		usbhost_dead_device_by_udid(handle);
-	}else if(hdr.message == MESSAGE_DEVICE_REMOVE_STOR){
-		struct storage_action action;
-		action.action = STOR_REM;
-
-		memcpy(&action.location, payload, sizeof(uint32_t));		
-		if(app_proxy.connected == 1){
-			write(stor_pipe[1], &action, sizeof(action));
-		}	
-		usbproxy_log(LL_DEBUG, "Notify Remove Storage %d", action.location);
 	}else if(hdr.length > 0) {
 		usbproxy_log(LL_DEBUG, "Unexpected message type %d length %d received!",hdr.message, hdr.length);
 	}
@@ -855,23 +825,16 @@ static int monitor_event(int sfd)
 static void *device_monitor(void* arg)
 {
 	int res;
+	int listenfd = *((int *)arg);
 	
 	while(!should_exit){
-		if(app_proxy.listenfd < 0){
-			usbproxy_log(LL_DEBUG, "Open Listen Socket..");
-			if((app_proxy.listenfd = usbhost_listen()) < 0){
-				usbproxy_log(LL_ERROR, "Open Listen Socket Error[%d]..", app_proxy.listenfd);
-				usleep(500000);
-				continue;
-			}
-		}
 		/*Handle Event*/
-		res = monitor_event(app_proxy.listenfd);
+		res = monitor_event(listenfd);
 		if(res == -1){
 			usbproxy_log(LL_ERROR, "Receive Listen Package Error Close socket..");
-			socket_close(app_proxy.listenfd);
-			app_proxy.listenfd = -1;
-			continue;
+			socket_close(listenfd);
+			listenfd = -1;
+			return NULL;
 		}
 	}
 	return NULL;
@@ -984,7 +947,7 @@ static int application_command(struct app_client *client)
 			bytes = SCSI_HEAD_SIZE;
 			break;
 		case SCSI_WRITE:
-			handled = storage_write(&scsi, client->ib_buf+SCSI_HEAD_SIZE);
+			handled = storage_write(&scsi,  client->ib_buf+SCSI_HEAD_SIZE);
 			if(handled < 0){
 				/*Send to peer notify write failed*/
 				scsi.relag = EWRITE;
@@ -1086,21 +1049,10 @@ static void application_process_send(struct app_client *client)
 
 static void application_layer_storage(int fd, short events)
 {
-	struct storage_action action;
-	int res;
-	
-	res = read(fd, &action, sizeof(action));
-	if(res <= 0) {
-		if(res < 0)
-			usbproxy_log(LL_ERROR, "Receive from client fd %d failed: %s", fd, strerror(errno));
-		else
-			usbproxy_log(LL_INFO, "Client %d connection closed", fd);
-		return;
-	}
-	usbproxy_log(LL_INFO, "%s Storage %d", 
-			action.action== STOR_ADD?"Add":"Remove", action.location);
-	storage_action_handle(&action, storage_callbakck);
+	usbproxy_log(LL_INFO, "Application Storage  Triger....");
+	storage_action_handle(fd, storage_callbakck);
 }
+
 
 static void application_layer_process(int fd, short events)
 {
@@ -1126,6 +1078,42 @@ static void application_layer_process(int fd, short events)
 	}
 }
 
+static int application_try_connect(void)
+{
+	int connectfd = -1;
+	int res;
+	struct collection dev_list = {NULL, 0};
+	
+	/*check and Remove DEAD Device*/		
+	usbhost_device_shutdown(0);
+	/*Check Device Count Not locket, may be dangerous*/
+	if(!collection_count(app_proxy.device)){
+		usbproxy_log(LL_ERROR, "No Device Found..");
+		return 0;
+	}
+	pthread_mutex_lock(&app_mutex);
+	collection_copy(&dev_list, app_proxy.device);
+	pthread_mutex_unlock(&app_mutex);
+	/*Loop Device and connect it*/
+	FOREACH(struct app_client *dev, &dev_list) {
+		if(dev->connected != APP_NOCONNECT){
+			continue;
+		}
+		connectfd = usbhost_connect(dev->devinfo.device_id, USBHOST_PORT);
+		if(connectfd > 0){
+			res = usbhost_init_device_by_udid(dev->devinfo.device_id, connectfd);
+			if(res){
+				usbproxy_log(LL_ERROR, "Init Device Connection Error..");
+				socket_close(connectfd);
+			}else{
+				usbproxy_log(LL_ERROR, "Application Device[%u] Connection Successful..", dev->devinfo.device_id);
+			}
+		}
+	} ENDFOREACH
+
+	return 1;
+}
+
 static int application_layer_loop()
 {	
 	int cnt, i;
@@ -1138,53 +1126,18 @@ static int application_layer_loop()
 	fdlist_create(&pollfds);
 	while(!should_exit){
 		/*Connect To Device*/
-		if(app_proxy.connected != 1){			
-			int connectfd = -1;
-			uint32_t devid = 0;
-			struct collection dev_list = {NULL, 0};
-
-			/*Check Device Count Not locket, may be dangerous*/
-			if(!collection_count(app_proxy.device)){
-				usbproxy_log(LL_ERROR, "No Device Found..");
-				usleep(1000000);
-				continue;
-			}
-			/*Remove DEAD Device*/		
-			usbhost_device_shutdown(0);
-			pthread_mutex_lock(&app_mutex);
-			collection_copy(&dev_list, app_proxy.device);
-			pthread_mutex_unlock(&app_mutex);
-			/*Loop Device and connect it*/
-			FOREACH(struct app_client *dev, &dev_list) {
-				if(dev->connected != APP_NOCONNECT){
-					continue;
-				}
-				connectfd = usbhost_connect(dev->devinfo.device_id, USBHOST_PORT);
-				if(connectfd > 0){					
-					devid = dev->devinfo.device_id;
-					break;
-				}
-			} ENDFOREACH
-			if(connectfd < 0){
-				usbproxy_log(LL_ERROR, "Connect No Device..");
-				usleep(800000);
-				continue;
-			}
-			/*Conncet Successful*/
-			if(usbhost_init_device_by_udid(devid, connectfd)){
-				usbproxy_log(LL_ERROR, "Init Device Connection Error..");
-				socket_close(connectfd);
-				usleep(800000);
-				continue;
-			}
-			app_proxy.connected = 1;
-		}
+		application_try_connect();
 		/*Poll Request*/		
 		fdlist_reset(&pollfds);
 		usbhost_client_fds(&pollfds);
-		/*Add storage pipe*/		
-		fdlist_add(&pollfds, FD_PIPE, stor_pipe[0], POLLIN);
-		
+		/*Add storage FD*/
+		if(app_proxy.storfd > 0){
+			fdlist_add(&pollfds, FD_USB, app_proxy.storfd, POLLIN);
+		}
+		if(!pollfds.count){
+			usleep(500000);
+			continue;
+		}
 		tspec.tv_sec = USBHOST_POLL_TIMER / 1000;
 		tspec.tv_nsec = (USBHOST_POLL_TIMER % 1000) * 1000000;
 		cnt = ppoll(pollfds.fds, pollfds.count, &tspec, &empty_sigset);
@@ -1200,13 +1153,13 @@ static int application_layer_loop()
 			usbhost_device_shutdown(0);
 		} else {
 			for(i=0; i<pollfds.count; i++) {
-				if(pollfds.fds[i].revents && pollfds.owners[i] == FD_PIPE){
+				if(pollfds.fds[i].revents && pollfds.owners[i] == FD_USB){
 					application_layer_storage(pollfds.fds[i].fd, pollfds.fds[i].revents);
 				}else if(pollfds.fds[i].revents && pollfds.owners[i] == FD_CLIENT) {
 					application_layer_process(pollfds.fds[i].fd, pollfds.fds[i].revents);
-				} 
+				}
 			}
-		}		
+		}
 	}	
 	fdlist_free(&pollfds);
 
@@ -1217,7 +1170,7 @@ USBHOST_API int usbhost_subscribe(void)
 {
 	int res;
 
-	res = pthread_create(&(app_proxy.monitor), NULL, device_monitor, NULL);
+	res = pthread_create(&(app_proxy.monitor), NULL, device_monitor, (void*)(&app_proxy.listenfd));
 	if (res != 0) {
 		usbproxy_log(LL_ERROR, "ERROR: Could not start device watcher thread!");
 		return res;
@@ -1242,16 +1195,25 @@ USBHOST_API void usbhost_application_init(void)
 	usbproxy_log(LL_DEBUG, "application layer init");
 	collection_init(&device_list);
 	pthread_mutex_init(&app_mutex, NULL);
+	/*Init Sorage list*/
+	storage_init();
 	/*Init Global Var*/
 	memset(&app_proxy, 0, sizeof(app_proxy));
 	app_proxy.device = &device_list;
-	app_proxy.listenfd = -1;	
-	app_proxy.connected = 0;
-	
-	if(pipe(stor_pipe) < 0) {
-		usbmuxd_log(LL_FATAL, "pipe() failed.");
+	/*Open listen socket*/
+	while((app_proxy.listenfd = usbhost_listen()) < 0){
+		usbproxy_log(LL_ERROR, "Open Listen Socket Error[%d]..", app_proxy.listenfd);		
+		usleep(500000);
+		continue;
 	}
-	storage_init();
+	/*open storage socket*/
+	while((app_proxy.storfd = storage_init_netlink_sock()) < 0){
+		usbproxy_log(LL_ERROR, "Open Storage Socket Error..");		
+		usleep(500000);
+		continue;
+	}
+	usbproxy_log(LL_WARNING, "Application Layer Init Finish[ListenFD:%d StorageFD:%d]", 
+				app_proxy.listenfd, app_proxy.storfd);		
 }
 
 USBHOST_API void* usbhost_application_run(void *args)
