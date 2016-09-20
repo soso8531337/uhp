@@ -402,7 +402,8 @@ static int storage_read(struct scsi_head *scsi, struct app_client *client)
 	client->ob_size += total;
 	usbproxy_log(LL_ERROR, "Read Finish:wtag=%d\nctrid=%d\naddr=%d\nlen=%d\nwlun=%d",  
 			 scsi->wtag, scsi->ctrid, scsi->addr, scsi->len, scsi->wlun);
-	
+	/*Free Memory*/	
+	free(payload);
 	return total;
 }
 
