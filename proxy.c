@@ -1110,7 +1110,8 @@ static int application_try_connect(void)
 			}
 		}
 	} ENDFOREACH
-
+	
+	collection_free(&dev_list);
 	return 1;
 }
 

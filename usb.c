@@ -373,6 +373,7 @@ static int usb_switch_aoa(libusb_device* dev)
 	}
 	if((res = libusb_get_active_config_descriptor(dev, &config)) != 0) {
 		usbmuxd_log(LL_WARNING, "Could not get configuration descriptor for device %d-%d: %d", bus, address, res);
+		libusb_free_config_descriptor(config);
 		libusb_close(handle);
 		return -1;
 	}
@@ -391,6 +392,7 @@ static int usb_switch_aoa(libusb_device* dev)
 					      sizeof(version), 0);
 		if (res < 0) {
 			usbmuxd_log(LL_SPEW, "Could not getting AOA protocol %d-%d: %d", bus, address, res);
+			libusb_free_config_descriptor(config);
 			libusb_close(handle);
 			return res;
 		}else{
@@ -400,6 +402,7 @@ static int usb_switch_aoa(libusb_device* dev)
 		/* In case of a no_app accessory, the version must be >= 2 */
 		if((acc_default.aoa_version < 2) && !acc_default.manufacturer) {
 			usbmuxd_log(LL_SPEW, "Connecting without an Android App only for AOA 2.0[%d-%d]", bus,address);
+			libusb_free_config_descriptor(config);
 			libusb_close(handle);
 			return -1;
 		}
@@ -414,6 +417,7 @@ static int usb_switch_aoa(libusb_device* dev)
 						  strlen(acc_default.manufacturer) + 1, 0);
 			if(res < 0){
 				usbmuxd_log(LL_WARNING, "Could not Set AOA manufacturer %d-%d: %d", bus, address, res);
+				libusb_free_config_descriptor(config);
 				libusb_close(handle);
 				return res;
 			}
@@ -429,6 +433,7 @@ static int usb_switch_aoa(libusb_device* dev)
 						  strlen(acc_default.model) + 1, 0);
 			if(res < 0){
 				usbmuxd_log(LL_WARNING, "Could not Set AOA model %d-%d: %d", bus, address, res);
+				libusb_free_config_descriptor(config);
 				libusb_close(handle);
 				return res;
 			}
@@ -444,6 +449,7 @@ static int usb_switch_aoa(libusb_device* dev)
 					  strlen(acc_default.description) + 1, 0);
 		if(res < 0){
 			usbmuxd_log(LL_WARNING, "Could not Set AOA description %d-%d: %d", bus, address, res);
+			libusb_free_config_descriptor(config);
 			libusb_close(handle);
 			return res;
 		}
@@ -457,6 +463,7 @@ static int usb_switch_aoa(libusb_device* dev)
 					  strlen(acc_default.version) + 1, 0);
 		if(res < 0){
 			usbmuxd_log(LL_WARNING, "Could not Set AOA version %d-%d: %d", bus, address, res);
+			libusb_free_config_descriptor(config);
 			libusb_close(handle);
 			return res;
 		}
@@ -470,6 +477,7 @@ static int usb_switch_aoa(libusb_device* dev)
 					  strlen(acc_default.url) + 1, 0);
 		if(res < 0){
 			usbmuxd_log(LL_WARNING, "Could not Set AOA url %d-%d: %d", bus, address, res);
+			libusb_free_config_descriptor(config);
 			libusb_close(handle);
 			return res;
 		}
@@ -483,6 +491,7 @@ static int usb_switch_aoa(libusb_device* dev)
 					  strlen(acc_default.serial) + 1, 0);
 		if(res < 0){
 			usbmuxd_log(LL_WARNING, "Could not Set AOA serial %d-%d: %d", bus, address, res);
+			libusb_free_config_descriptor(config);
 			libusb_close(handle);
 			return res;
 		}
@@ -492,14 +501,17 @@ static int usb_switch_aoa(libusb_device* dev)
 					  AOA_START_ACCESSORY, 0, 0, NULL, 0, 0);
 		if(res < 0){
 			usbmuxd_log(LL_WARNING, "Could not Start AOA %d-%d: %d", bus, address, res);
+			libusb_free_config_descriptor(config);
 			libusb_close(handle);
 			return res;
 		}
 		usbmuxd_log(LL_WARNING, "Turning the device %d-%d in Accessory mode Successful", bus, address);
+		libusb_free_config_descriptor(config);
 		libusb_close(handle);
 		return 0;
 	}	
 	
+	libusb_free_config_descriptor(config);
 	libusb_close(handle);
 	usbmuxd_log(LL_SPEW, "No Found Android Device in %d-%d", bus, address);
 
