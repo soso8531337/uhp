@@ -52,7 +52,7 @@ enum{
 };
 
 struct udevd_uevent_msg {
-	int id;
+	unsigned char id;
 	char *action;
 	char *devpath;
 	char *subsystem;	
@@ -67,7 +67,7 @@ struct udevd_uevent_msg {
 static struct collection storage_list;
 unsigned char disk_ID = 0;
 
-static int disk_sdid_get(void)
+static unsigned char  disk_sdid_get(void)
 {
 	if(!(disk_ID & MERGE_(STOR_SD, 0))){
 		return MERGE_(STOR_SD, 0);
@@ -225,7 +225,7 @@ static int storlist_insert(struct udevd_uevent_msg *msg)
 	return 0;
 }
 
-static int  storlist_remove(struct udevd_uevent_msg *msg, int *id)
+static int  storlist_remove(struct udevd_uevent_msg *msg, unsigned char *id)
 {
 	if(!msg || !id){
 		return -1;
@@ -369,7 +369,8 @@ int storage_action_handle(int sockfd, stor_callback callback)
 {
 	char buffer[UEVENT_BUFFER_SIZE*2] = {0};
 	struct udevd_uevent_msg *msg;
-	int bufpos, diskid = 0;
+	int bufpos; 
+	unsigned char diskid = 0;
 	ssize_t size;
 	char *pos = NULL;
 
@@ -443,11 +444,11 @@ int storage_action_handle(int sockfd, stor_callback callback)
 		usbproxy_log(LL_NOTICE, "ADD Device %d [%s/%s] To Storage List", 
 				msg->id, msg->devname,  msg->devpath);		
 	}else if(!strcasecmp(msg->action, STOR_STR_REM)){
-		int id =0;
+		unsigned char id =0;
 		usbproxy_log(LL_NOTICE, "Remove Device [%s/%s] From Storage List", 
 				 msg->devname,  msg->devpath);				
 		if(storlist_remove(msg, &id) == 0 && callback){
-			callback(STOR_REM, diskid);
+			callback(STOR_REM, id);
 		}
 		free(msg);
 	}else{
@@ -476,4 +477,9 @@ int storage_find(int diskID, char *devname, int len)
 	} ENDFOREACH
 
 	return 0;
+}
+
+unsigned char  storage_get_disklun(void)
+{
+	return disk_ID;
 }

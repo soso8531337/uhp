@@ -65,12 +65,17 @@
 #include "log.h"
 #include "storage.h"
 
+
+#define RELEASE 1
+
 //#define USBHOST_PORT		8080
 #define USBHOST_PORT		5555
 
 #define USBHOST_NBUF_SIZE		262144
 #define USBHOST_POLL_TIMER		(1*1000) /*1s*/
 #define USBHOST_STORAGE			64
+#define STOR_PAYLOAD		1
+
 struct app_client{
 	struct usbmuxd_device_record devinfo;
 	int connected;
@@ -304,6 +309,9 @@ static int storage_write(struct scsi_head *scsi,  unsigned char *payload)
 	if(!scsi || !payload){
 		return -1;
 	}
+	if(scsi->len == 0){
+		return -1;
+	}	
 	wlen = scsi->len;
 	offset = scsi->addr *SCSI_SECTOR_SIZE;
 
@@ -351,6 +359,9 @@ static int storage_read(struct scsi_head *scsi, struct app_client *client)
 	char devname[512] = {0};
 	
 	if(!scsi || !client){
+		return -1;
+	}
+	if(scsi->len == 0){
 		return -1;
 	}
 	wlen = scsi->len;
@@ -408,6 +419,26 @@ static int storage_read(struct scsi_head *scsi, struct app_client *client)
 	return total;
 }
 
+static int storage_disklun(struct scsi_head *scsi, struct app_client *client)
+{	
+	unsigned char disklun=storage_get_disklun();
+
+	if(!scsi || !client){
+		return -1;
+	}
+	if(scsi->len != STOR_PAYLOAD){
+		usbproxy_log(LL_ERROR, "Disk Lun Length mismatch[%d/%d]", scsi->len, STOR_PAYLOAD);
+		return -1;
+	}
+	
+	memcpy(client->ob_buf+client->ob_size, scsi, SCSI_HEAD_SIZE);
+	client->ob_size += SCSI_HEAD_SIZE;
+	memcpy(client->ob_buf+client->ob_size, &disklun, STOR_PAYLOAD);
+	client->ob_size += STOR_PAYLOAD;
+	usbproxy_log(LL_DEBUG, "Disk Lun is [%d]", disklun);
+
+	return 0;
+}
 static int storage_operation_result(struct scsi_head *scsi, struct app_client *client)
 {
 	if(!scsi || !client){
@@ -728,20 +759,20 @@ USBHOST_API int usbhost_socket_recv(int sfd, char *data, uint32_t len, uint32_t 
 }
 
 /*storage add or remove notify to peer*/
-void storage_callbakck(int action, int diskid)
+void storage_callbakck(int action, unsigned char diskid)
 {
-#define STOR_PAYLOAD		4
 	struct scsi_head header;
 
 	pthread_mutex_lock(&app_mutex);
 	FOREACH(struct app_client *lc, app_proxy.device) {
-		if(lc->connected == APP_NOCONNECT){
+		if(lc->connected == APP_CONNECTED){
 			/*Notify to peer*/
+			memset(&header, 0, sizeof(header));
 			header.head = SCSI_DEVICE_MAGIC;
 			if(action == STOR_ADD){
-				header.ctrid = SCSI_DISK_ADD;
+				header.ctrid = SCSI_INPUT;
 			}else{
-				header.ctrid = SCSI_DISK_REMOVE;
+				header.ctrid = SCSI_OUTPUT;
 			}
 			srand( (unsigned)time( NULL ));
 			header.wtag = rand();
@@ -756,6 +787,8 @@ void storage_callbakck(int action, int diskid)
 			lc->ob_size += SCSI_HEAD_SIZE;
 			memcpy(lc->ob_buf+lc->ob_size, &diskid, STOR_PAYLOAD);
 			lc->ob_size += STOR_PAYLOAD;
+			usbproxy_log(LL_WARNING, "Notify Disk %s--> [%d]", 
+					action == STOR_ADD?"Add":"Remove", diskid);
 #else
 			char buf[256] = {0};
 			sprintf(buf, "Storage: Aciton=%d ID=%d", action, diskid);
@@ -917,8 +950,7 @@ static int protocol_decode(struct app_client *client, struct scsi_head *scsi)
 
 static int application_command(struct app_client *client)
 {
-	int handled = -1;
-	uint32_t bytes;
+	uint32_t bytes = 0;
 	struct scsi_head scsi;
 	int res;
 	
@@ -946,45 +978,56 @@ static int application_command(struct app_client *client)
 	/*Check Buffer is Enough*/
 	switch(scsi.ctrid) {
 		case SCSI_READ:
-			handled = storage_read(&scsi, client);
-			if(handled < 0){
+			res = storage_read(&scsi, client);
+			if(res < 0){
 				/*Send to peer notify read failed*/
 				scsi.relag = EREAD;
 				scsi.head = SCSI_DEVICE_MAGIC;
 				storage_operation_result(&scsi, client);				
-				handled = 0;
-			}else if(handled > 0){
+			}else if(res > 0){
 				client->events |= POLLOUT;
 			}			
-			bytes = SCSI_HEAD_SIZE;
 			break;
 		case SCSI_WRITE:
-			handled = storage_write(&scsi,  client->ib_buf+SCSI_HEAD_SIZE);
-			if(handled < 0){
+			res = storage_write(&scsi,  client->ib_buf+SCSI_HEAD_SIZE);
+			if(res < 0){
 				/*Send to peer notify write failed*/
 				scsi.relag = EWRITE;
 				scsi.head = SCSI_DEVICE_MAGIC;
-				handled = 0;
-			}else if(handled > 0){
+			}else if(res > 0){
 				/*Write Finish*/		
 				client->events |= POLLIN;
 			}			
-			bytes = SCSI_HEAD_SIZE+scsi.len;
+			bytes = scsi.len;
 			storage_operation_result(&scsi, client);
 			break;
 		case SCSI_TEST:
+			/*Just return it*/
+			storage_operation_result(&scsi, client);
+			break;
+		case SCSI_GET_LUN:
+			/*Get disk Num*/
+			res = storage_disklun(&scsi, client);
+			if(res < 0){
+				/*Send to peer notify read failed*/
+				scsi.relag = EDISKLEN;
+				scsi.head = SCSI_DEVICE_MAGIC;
+				storage_operation_result(&scsi, client);				
+			}else{
+				client->events |= POLLOUT;
+			}
+			break;
 		default:
-			handled = 0;			
-			bytes = SCSI_HEAD_SIZE;
 			usbproxy_log(LL_ERROR, "Unhandle SCSI Type-->%d",  scsi.ctrid);
 	}
-	/*Offset Buffer*/
+	/*Offset Buffer*/	
+	bytes += SCSI_HEAD_SIZE;
 	client->ib_size -= bytes;
 	usbproxy_log(LL_ERROR, "Application Handle Finish:\nwtag=%d\nctrid=%d\naddr=%d\nlen=%d\nwlun=%d\nSkip Next:SkipLen:%d\nCntLen:%d",  
 			 scsi.wtag, scsi.ctrid, scsi.addr, scsi.len, scsi.wlun, bytes, client->ib_size);	
 	memmove(client->ib_buf, client->ib_buf + bytes, client->ib_size);	
 	/*Encode Buffer and Send To peer*/
-	return handled;
+	return 0;
 }
 
 static void application_process_recv(struct app_client *client)

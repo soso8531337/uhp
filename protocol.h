@@ -33,7 +33,8 @@
 enum{
 	EREAD = 1,
 	EWRITE=2,
-	ENODISK = 3
+	ENODISK = 3,
+	EDISKLEN = 4
 };
 
 #define SCSI_WFLAG  1 << 7
@@ -42,9 +43,10 @@ enum {
   SCSI_READ  = 1,//28
   SCSI_WRITE = 2 | SCSI_WFLAG,//2a
   SCSI_INQUIRY = 3,//12
-  SCSI_READ_CAPACITY =4,//25  
-  SCSI_DISK_REMOVE,
-  SCSI_DISK_ADD
+  SCSI_READ_CAPACITY =4,//25
+  SCSI_GET_LUN = 5,
+  SCSI_INPUT = 6,
+  SCSI_OUTPUT = 7,
 };
 
 enum {
