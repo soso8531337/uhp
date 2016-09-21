@@ -94,6 +94,7 @@ struct app_config{
 enum app_state{
 	APP_NOCONNECT = 0,
 	APP_CONNECTED,	// connected
+	APP_SHUTDOWN,
 	APP_DEAD
 };
 
@@ -436,7 +437,7 @@ static void application_connection_setdown(struct app_client *client)
 	}
 	/*Set Conncetion Status to Dead*/
 	pthread_mutex_lock(&app_mutex);
-	client->connected =  APP_DEAD;
+	client->connected =  APP_SHUTDOWN;
 	socket_close(client->commufd);
 	pthread_mutex_unlock(&app_mutex);
 	usbproxy_log(LL_ERROR, "TearDown Socket %d", client->commufd);	
@@ -578,9 +579,8 @@ USBHOST_API void usbhost_device_shutdown(int rmall)
 	usbproxy_log(LL_FLOOD, "usbhost_device_shutdown"); 
 	pthread_mutex_lock(&app_mutex);
 	FOREACH(struct app_client *dev, &device_list) {
-		if(rmall == 1 || dev->connected == APP_DEAD){
-			usbproxy_log(LL_DEBUG, "Remove Dead Device %d[%s]", 
-					dev->devinfo.device_id, dev->devinfo.serial_number);
+		if(rmall == 1 || dev->connected == APP_DEAD
+				|| dev->connected == APP_SHUTDOWN){
 			if(dev->ib_buf){
 				free(dev->ib_buf);
 			}
@@ -588,8 +588,19 @@ USBHOST_API void usbhost_device_shutdown(int rmall)
 				free(dev->ob_buf);
 			}
 			socket_close(dev->commufd);
-			collection_remove(&device_list, dev);
-			free(dev);			
+			if(rmall == 1 || dev->connected == APP_DEAD){				
+				usbproxy_log(LL_DEBUG, "Remove Dead Device %d[%s]", 
+						dev->devinfo.device_id, dev->devinfo.serial_number);
+				collection_remove(&device_list, dev);
+				free(dev);
+			}else{
+				dev->commufd = -1;
+				dev->connected = APP_NOCONNECT;
+				dev->ib_buf = NULL;
+				dev->ob_buf = NULL;
+				usbproxy_log(LL_DEBUG, "ShutDown Device %d[%s]", 
+						dev->devinfo.device_id, dev->devinfo.serial_number);
+			}
 		}
 	} ENDFOREACH
 	pthread_mutex_unlock(&app_mutex);
