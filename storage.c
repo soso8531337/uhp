@@ -36,7 +36,8 @@
 #define STOR_STR_ADD			"add"
 #define STOR_STR_REM			"remove"
 #define STOR_ID_MAX				8
-#define SYS_BLK_SD		"usb1/1-1/1-1.1"
+//#define SYS_BLK_SD		"usb1/1-1/1-1.1"
+#define SYS_BLK_SD 		"mtk-sd.0"
 #define SYS_CLA_BLK 	"/sys/class/block"
 #define SYS_BLK		"/sys/block"
 

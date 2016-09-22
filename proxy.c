@@ -313,7 +313,7 @@ static int storage_write(struct scsi_head *scsi,  unsigned char *payload)
 		return -1;
 	}	
 	wlen = scsi->len;
-	offset = scsi->addr *SCSI_SECTOR_SIZE;
+	offset = (off_t)scsi->addr *SCSI_SECTOR_SIZE;
 
 	if(storage_find(scsi->wlun, devname, sizeof(devname)-1) != 1){
 		usbproxy_log(LL_ERROR, "No Found Devname: %d", scsi->wlun);
@@ -365,7 +365,7 @@ static int storage_read(struct scsi_head *scsi, struct app_client *client)
 		return -1;
 	}
 	wlen = scsi->len;
-	offset = scsi->addr *SCSI_SECTOR_SIZE;
+	offset = (off_t)scsi->addr *SCSI_SECTOR_SIZE;
 	if(storage_find(scsi->wlun, devname, sizeof(devname)-1) != 1){
 		usbproxy_log(LL_ERROR, "No Found Devname: %d", scsi->wlun);
 		return -1;
