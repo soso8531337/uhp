@@ -439,6 +439,37 @@ static int storage_disklun(struct scsi_head *scsi, struct app_client *client)
 
 	return 0;
 }
+
+static int storage_diskinfo(struct scsi_head *scsi, struct app_client *client)
+{
+	struct scsi_inquiry_info dinfo;
+	int res, inquirylen = 0;
+	
+	if(!scsi || !client){
+		return -1;
+	}
+	inquirylen = sizeof(struct scsi_inquiry_info);
+	if(scsi->len != inquirylen){
+		usbproxy_log(LL_ERROR, "Disk Inquiry Length mismatch[%d/%d]", 
+				scsi->len, inquirylen);
+		return -1;
+	}	
+	
+	memset(&dinfo, 0, inquirylen);
+	res = storage_get_diskinfo(scsi->wlun, &dinfo);
+	if(res < 0){
+		usbproxy_log(LL_ERROR, "Disk Inquiry Error");
+		return -1;
+	}
+	memcpy(client->ob_buf+client->ob_size, scsi, SCSI_HEAD_SIZE);
+	client->ob_size += SCSI_HEAD_SIZE;
+	memcpy(client->ob_buf+client->ob_size, &dinfo, inquirylen);
+	client->ob_size += inquirylen;
+	usbproxy_log(LL_DEBUG, "Disk[%d]  \nSize:%lld\nVendor:%s\nProduct:%s\nVersion:%s\nSerical:%s", 
+			scsi->wlun, dinfo.size, dinfo.vendor, dinfo.product, dinfo.version, dinfo.serial);
+
+	return 0;
+}
 static int storage_operation_result(struct scsi_head *scsi, struct app_client *client)
 {
 	if(!scsi || !client){
@@ -1011,6 +1042,17 @@ static int application_command(struct app_client *client)
 			if(res < 0){
 				/*Send to peer notify read failed*/
 				scsi.relag = EDISKLEN;
+				scsi.head = SCSI_DEVICE_MAGIC;
+				storage_operation_result(&scsi, client);				
+			}else{
+				client->events |= POLLOUT;
+			}
+			break;
+		case SCSI_INQUIRY:
+			res = storage_diskinfo(&scsi, client);
+			if(res < 0){
+				/*Send to peer notify read failed*/
+				scsi.relag = EDISKINFO;
 				scsi.head = SCSI_DEVICE_MAGIC;
 				storage_operation_result(&scsi, client);				
 			}else{

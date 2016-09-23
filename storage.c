@@ -19,12 +19,15 @@
 #include <sys/select.h>
 #include <linux/types.h>
 #include <linux/netlink.h>
+#include <sys/ioctl.h>
+#include <scsi/sg.h>
 
 
 #include "utils.h"
 #include "device.h"
 #include "log.h"
 #include "storage.h"
+#include "protocol.h"
 
 #ifndef NETLINK_KOBJECT_UEVENT
 #define NETLINK_KOBJECT_UEVENT	15
@@ -41,15 +44,23 @@
 #define SYS_CLA_BLK 	"/sys/class/block"
 #define SYS_BLK		"/sys/block"
 
+#define STOR_IDOFFSET(a)	(1<<(a))
+#if !defined(BLKGETSIZE64)
+#define BLKGETSIZE64           _IOR(0x12,114,size_t)
+#endif
+
+#define STOR_DFT_PRO		"U-Storage"
+#define STOR_DFT_VENDOR		"i4season"
+
 enum{
 	STOR_SD_0=0,
-	STOR_USB_1=2,
-	STOR_USB_2=4,
-	STOR_USB_3=8,
-	STOR_USB_4=16,
-	STOR_USB_5=32,
-	STOR_USB_6=64,
-	STOR_USB_7=128
+	STOR_USB_1=1,
+	STOR_USB_2=2,
+	STOR_USB_3=3,
+	STOR_USB_4=4,
+	STOR_USB_5=5,
+	STOR_USB_6=6,
+	STOR_USB_7=7
 };
 
 struct udevd_uevent_msg {
@@ -65,12 +76,15 @@ struct udevd_uevent_msg {
 	char *envp[UEVENT_NUM_ENVP+1];
 	char envbuf[];
 };
+
 static struct collection storage_list;
 unsigned char disk_ID = 0;
 
 static unsigned char  disk_sdid_get(void)
 {
-	if(!(disk_ID & MERGE_(STOR_SD, 0))){
+	if(!(disk_ID & 
+		STOR_IDOFFSET(MERGE_(STOR_SD, 0)))){		
+		disk_ID |= STOR_IDOFFSET(MERGE_(STOR_SD, 0));
 		return MERGE_(STOR_SD, 0);
 	}
 	return -1;
@@ -78,19 +92,33 @@ static unsigned char  disk_sdid_get(void)
 
 static int disk_usbid_get(void)
 {
-	if(!(disk_ID & MERGE_(STOR_USB, 1))){
+	if(!(disk_ID & 
+		STOR_IDOFFSET(MERGE_(STOR_USB, 1)))){
+		disk_ID |= STOR_IDOFFSET(MERGE_(STOR_USB, 1));
 		return MERGE_(STOR_USB, 1);
-	}else if(!(disk_ID & MERGE_(STOR_USB, 2))){
+	}else if(!(disk_ID & 
+		STOR_IDOFFSET(MERGE_(STOR_USB, 2)))){		
+		disk_ID |= STOR_IDOFFSET(MERGE_(STOR_USB, 2));
 		return MERGE_(STOR_USB, 2);
-	}else if(!(disk_ID & MERGE_(STOR_USB, 3))){
+	}else if(!(disk_ID & 
+		STOR_IDOFFSET(MERGE_(STOR_USB, 3)))){		
+		disk_ID |= STOR_IDOFFSET(MERGE_(STOR_USB, 3));
 		return MERGE_(STOR_USB, 3);
-	}else if(!(disk_ID & MERGE_(STOR_USB, 4))){
+	}else if(!(disk_ID & 
+		STOR_IDOFFSET(MERGE_(STOR_USB, 4)))){		
+		disk_ID |= STOR_IDOFFSET(MERGE_(STOR_USB, 4));
 		return MERGE_(STOR_USB, 4);
-	}else if(!(disk_ID & MERGE_(STOR_USB, 5))){
+	}else if(!(disk_ID & 
+		STOR_IDOFFSET(MERGE_(STOR_USB, 5)))){		
+		disk_ID |= STOR_IDOFFSET(MERGE_(STOR_USB, 5));
 		return MERGE_(STOR_USB, 5);
-	}else if(!(disk_ID & MERGE_(STOR_USB, 6))){
+	}else if(!(disk_ID & 
+		STOR_IDOFFSET(MERGE_(STOR_USB, 6)))){		
+		disk_ID |= STOR_IDOFFSET(MERGE_(STOR_USB, 6));
 		return MERGE_(STOR_USB, 6);
-	}else if(!(disk_ID & MERGE_(STOR_USB, 7))){
+	}else if(!(disk_ID & 
+		STOR_IDOFFSET(MERGE_(STOR_USB, 7)))){		
+		disk_ID |= STOR_IDOFFSET(MERGE_(STOR_USB, 7));
 		return MERGE_(STOR_USB, 7);
 	}
 
@@ -124,6 +152,70 @@ static int disk_chk_proc(char *dev)
 	}
 
 	fclose(procpt);
+	return 0;
+}
+
+static int disk_get_space(char *devname, int64_t *capacity)
+{
+	unsigned char sense_b[32] = {0};
+	unsigned char rcap_buff[8] = {0};
+	unsigned char cmd[] = {0x25, 0, 0, 0 , 0, 0};
+	struct sg_io_hdr io_hdr;
+	unsigned int lastblock, blocksize;
+	int64_t disk_cap = 0;
+	int dev_fd;
+
+	if(!devname){
+		return -1;
+	}
+	dev_fd= open(devname, O_RDWR | O_NONBLOCK);
+	if (dev_fd < 0 && errno == EROFS)
+		dev_fd = open(devname, O_RDONLY | O_NONBLOCK);
+	if (dev_fd<0){
+		usbproxy_log(LL_ERROR, "Open %s Failed:%s", devname, strerror(errno));
+		return -1; 
+	}
+
+	memset(&io_hdr, 0, sizeof(struct sg_io_hdr));
+	io_hdr.interface_id = 'S';
+	io_hdr.cmd_len = sizeof(cmd);
+	io_hdr.dxferp = rcap_buff;
+	io_hdr.dxfer_len = 8;
+	io_hdr.mx_sb_len = sizeof(sense_b);
+	io_hdr.dxfer_direction = SG_DXFER_FROM_DEV;
+	io_hdr.cmdp = cmd;
+	io_hdr.sbp = sense_b;
+	io_hdr.timeout = 20000;
+
+	if(ioctl(dev_fd, SG_IO, &io_hdr)<0){
+		usbproxy_log(LL_ERROR,  "IOCTRL error:%s[Used BLKGETSIZE64]!", strerror(errno));
+		if (ioctl(dev_fd, BLKGETSIZE64, &disk_cap) != 0) {			
+			usbproxy_log(LL_ERROR, "Get Disk Capatiy Failed");
+			close(dev_fd);
+			return -1;		
+		}		
+		*capacity = disk_cap;		
+		usbproxy_log(LL_ERROR,  "Disk Capacity = %lld Bytes", disk_cap);
+		close(dev_fd);
+		return 0;
+	}
+
+	/* Address of last disk block */
+	lastblock =  ((rcap_buff[0]<<24)|(rcap_buff[1]<<16)|
+	(rcap_buff[2]<<8)|(rcap_buff[3]));
+
+	/* Block size */
+	blocksize =  ((rcap_buff[4]<<24)|(rcap_buff[5]<<16)|
+	(rcap_buff[6]<<8)|(rcap_buff[7]));
+
+	/* Calculate disk capacity */
+	disk_cap  = (lastblock+1);
+	disk_cap *= blocksize;
+	usbproxy_log(LL_ERROR,  "Disk Capacity = %lld Bytes", disk_cap);
+
+	*capacity = disk_cap;
+	close(dev_fd);
+
 	return 0;
 }
 
@@ -451,6 +543,8 @@ int storage_action_handle(int sockfd, stor_callback callback)
 		if(storlist_remove(msg, &id) == 0 && callback){
 			callback(STOR_REM, id);
 		}
+		/*Remove ID*/
+		disk_ID &= (~(STOR_IDOFFSET(id)));
 		free(msg);
 	}else{
 		usbproxy_log(LL_NOTICE, "Unhandle Device %s [%s/%s] Event", 
@@ -483,4 +577,29 @@ int storage_find(int diskID, char *devname, int len)
 unsigned char  storage_get_disklun(void)
 {
 	return disk_ID;
+}
+
+int storage_get_diskinfo(int16_t doffset, struct scsi_inquiry_info *info)
+{
+	char devname[512] = {0};
+	int res;
+
+	if(!info){
+		return -1;
+	}
+	if(storage_find(doffset, devname, sizeof(devname)-1) != 1){
+		usbproxy_log(LL_ERROR, "No Found Devname: %d", doffset);
+		return -1;
+	}
+	res = disk_get_space(devname, &(info->size));
+	if(res < 0){
+		return -1;
+	}
+	/*Init Other Info*/
+	strcpy(info->product, STOR_DFT_PRO);
+	strcpy(info->vendor, STOR_DFT_VENDOR);
+	strcpy(info->serial, "1234567890abcdef");
+	strcpy(info->version, "1.0");
+
+	return 0;
 }

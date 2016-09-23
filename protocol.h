@@ -34,7 +34,8 @@ enum{
 	EREAD = 1,
 	EWRITE=2,
 	ENODISK = 3,
-	EDISKLEN = 4
+	EDISKLEN = 4,
+	EDISKINFO=5
 };
 
 #define SCSI_WFLAG  1 << 7
@@ -65,6 +66,14 @@ struct scsi_head{
 	int32_t len;
 	int16_t wlun;
 	int16_t relag; /*Response Code*/
-};
+}__attribute__((__packed__));
+
+struct scsi_inquiry_info{
+  int64_t size;
+  char vendor[ 16];
+  char product[ 32];
+  char version[ 32];
+  char serial[32];
+}__attribute__((__packed__));
 
 #endif
