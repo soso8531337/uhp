@@ -66,7 +66,7 @@
 #include "storage.h"
 
 
-#define RELEASE 1
+//#define RELEASE 1
 
 //#define USBHOST_PORT		8080
 #define USBHOST_PORT		5555

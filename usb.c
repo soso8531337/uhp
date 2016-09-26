@@ -190,8 +190,11 @@ static void tx_callback_aoa(struct libusb_transfer *xfer)
 {
 	struct mux_connection *conn= (struct mux_connection *)xfer->user_data;
 	struct usb_device *dev = conn->dev->usbdev;
-	usbmuxd_log(LL_SPEW, "TX callback dev %d-%d len %d -> %d status %d", dev->bus, dev->address, xfer->length, xfer->actual_length, xfer->status);
-	if(xfer->status == LIBUSB_TRANSFER_COMPLETED){
+	usbmuxd_log(LL_SPEW, "TX AOA callback dev %d-%d len %d -> %d status %d", 
+			dev->bus, dev->address, xfer->length, xfer->actual_length, xfer->status);
+	if(xfer->status == LIBUSB_TRANSFER_COMPLETED){		
+		usbmuxd_log(LL_SPEW, "Update AOA rx-ack:%d -> %d", 
+				conn->rx_ack, conn->rx_ack+xfer->actual_length);		
 		conn->rx_ack += xfer->actual_length;
 	}else{
 		switch(xfer->status) {

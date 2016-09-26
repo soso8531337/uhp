@@ -232,7 +232,20 @@ static int send_anon_rst(struct mux_device *dev, uint16_t sport, uint16_t dport,
 static int send_aoa(struct mux_connection *conn, const unsigned char *data, int length)
 {
 	int res;
-	if((res = usb_send_aoa(conn, data, length)) < 0) {
+	unsigned char *payload = NULL;
+
+	if(!data || !length){
+		usbmuxd_log(LL_ERROR, "usb_send_aoa failed while sending packet (len %d) to device %d", 
+					length, conn->dev->id);
+		return 0;
+	}
+	payload = calloc(1, length);
+	if(payload == NULL){
+		usbmuxd_log(LL_ERROR, "Calloc Memory Failed");
+		return -1;
+	}
+	memcpy(payload, data, length);
+	if((res = usb_send_aoa(conn, payload, length)) < 0) {
 		usbmuxd_log(LL_ERROR, "usb_send_aoa failed while sending packet (len %d) to device %d: %d", 
 					length, conn->dev->id, res);
 		return res;
@@ -1030,7 +1043,8 @@ void device_check_timeouts(void)
 	FOREACH(struct mux_device *dev, &device_list) {
 		if(dev->state == MUXDEV_ACTIVE) {
 			FOREACH(struct mux_connection *conn, &dev->connections) {
-				if((conn->state == CONN_CONNECTED) && 
+				if((conn->dev->usbdev->type == USB_IOS) &&
+					(conn->state == CONN_CONNECTED) && 
 						(conn->flags & CONN_ACK_PENDING) && 
 						(ct - conn->last_ack_time) > ACK_TIMEOUT) {
 					usbmuxd_log(LL_DEBUG, "Sending ACK due to expired timeout (%" PRIu64 " -> %" PRIu64 ")", conn->last_ack_time, ct);
