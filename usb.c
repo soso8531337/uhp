@@ -29,8 +29,6 @@
 #include <stdint.h>
 #include <string.h>
 
-#include <libusb.h>
-
 #include "usb.h"
 #include "log.h"
 #include "device.h"
