@@ -513,6 +513,7 @@ int storage_action_handle(int sockfd, stor_callback callback)
 	/*handle event*/
 	if(!strcasecmp(msg->action, STOR_STR_ADD)){
 		char devbuf[128] = {0};
+		int fd = -1;
 		/*Disk ID*/
 		if(msg->devpath && strstr(msg->devpath, SYS_BLK_SD)){
 			/*SD Card*/
@@ -528,6 +529,17 @@ int storage_action_handle(int sockfd, stor_callback callback)
 		sprintf(devbuf, "/dev/%s", msg->devname);
 		if(access(devbuf, F_OK)){
 			mknod(devbuf, S_IFBLK|0644, msg->devt);
+		}
+		/*Check dev can open*/
+		if((fd = open(devbuf, O_RDONLY)) < 0){
+			/*Remove ID*/
+			disk_ID &= (~(STOR_IDOFFSET(diskid)));
+			usbproxy_log(LL_ERROR, "Open [%s] Failed:%s[Disk ID Recover to %d]", 
+				devbuf, strerror(errno), disk_ID);
+			free(msg);
+			return 0;
+		}else{
+			close(fd);
 		}
 		/*Add it to list*/
 		msg->id = diskid;
