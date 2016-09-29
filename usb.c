@@ -92,6 +92,40 @@ static int devlist_failures;
 static int device_polling;
 static int device_hotplug = 1;
 
+/*
+*if device is android device, we must invoke this function firstly, if not, tx_callback_aoa function will segment fault
+*/
+static void usb_predisconnect_aoa(struct usb_device *dev){
+	if(!dev->dev) {
+		return;
+	}
+
+	// kill the rx xfer and tx xfers and try to make sure the callbacks
+	// get called before we free the device
+	FOREACH(struct libusb_transfer *xfer, &dev->rx_xfers) {
+		usbmuxd_log(LL_DEBUG, "usb_disconnect: cancelling RX xfer %p", xfer);
+		libusb_cancel_transfer(xfer);
+	} ENDFOREACH
+
+	FOREACH(struct libusb_transfer *xfer, &dev->tx_xfers) {
+		usbmuxd_log(LL_DEBUG, "usb_disconnect: cancelling TX xfer %p", xfer);
+		libusb_cancel_transfer(xfer);
+	} ENDFOREACH
+
+	// Busy-wait until all xfers are closed
+	while(collection_count(&dev->rx_xfers) || collection_count(&dev->tx_xfers)) {
+		struct timeval tv;
+		int res;
+
+		tv.tv_sec = 0;
+		tv.tv_usec = 1000;
+		if((res = libusb_handle_events_timeout(NULL, &tv)) < 0) {
+			usbmuxd_log(LL_ERROR, "libusb_handle_events_timeout for usb_disconnect failed: %d", res);
+			break;
+		}
+	}
+}
+
 static void usb_disconnect(struct usb_device *dev)
 {
 	if(!dev->dev) {
@@ -135,6 +169,11 @@ static void usb_disconnect(struct usb_device *dev)
 static void reap_dead_devices(void) {
 	FOREACH(struct usb_device *usbdev, &device_list) {
 		if(!usbdev->alive) {
+			/*judge usbdevice type, if android we invoke usb_predisconnect_aoa*/
+			if(usbdev->type == USB_ANDROID){
+				usb_predisconnect_aoa(usbdev);
+				usbmuxd_log(LL_SPEW, "Android Device PreDisconnect Handle Finish");
+			}
 			device_remove(usbdev);
 			usb_disconnect(usbdev);
 		}
