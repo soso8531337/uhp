@@ -413,7 +413,6 @@ static int usb_switch_aoa(libusb_device* dev)
 	}
 	if((res = libusb_get_active_config_descriptor(dev, &config)) != 0) {
 		usbmuxd_log(LL_WARNING, "Could not get configuration descriptor for device %d-%d: %d", bus, address, res);
-		libusb_free_config_descriptor(config);
 		libusb_close(handle);
 		return -1;
 	}
