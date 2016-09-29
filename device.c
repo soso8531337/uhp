@@ -244,6 +244,8 @@ static int send_aoa(struct mux_connection *conn, const unsigned char *data, int 
 		usbmuxd_log(LL_ERROR, "Calloc Memory Failed");
 		return -1;
 	}
+	usbmuxd_log(LL_DEBUG, "[OUT][AOA] dev=%d sport=%d dport=%d seq=%d ack=%d flags=0x%x window=%d len=%d",
+		    conn->dev->id, conn->sport, conn->dport, conn->tx_seq, conn->tx_ack, flags, conn->tx_win, length);
 	memcpy(payload, data, length);
 	if((res = usb_send_aoa(conn, payload, length)) < 0) {
 		usbmuxd_log(LL_ERROR, "usb_send_aoa failed while sending packet (len %d) to device %d: %d", 
