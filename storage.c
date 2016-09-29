@@ -334,8 +334,8 @@ static int  storlist_remove(struct udevd_uevent_msg *msg, unsigned char *id)
 			return 0;
 		}
 	} ENDFOREACH
-	/*Insert it to list*/
-	collection_add(&storage_list, msg);	
+	
+	usbproxy_log(LL_NOTICE, "Remove Device But Not Found %s", msg->devname);
 	return 1;
 }
 
@@ -552,11 +552,13 @@ int storage_action_handle(int sockfd, stor_callback callback)
 		unsigned char id =0;
 		usbproxy_log(LL_NOTICE, "Remove Device [%s/%s] From Storage List", 
 				 msg->devname,  msg->devpath);				
-		if(storlist_remove(msg, &id) == 0 && callback){
-			callback(STOR_REM, id);
+		if(storlist_remove(msg, &id) == 0){
+			if(callback){
+				callback(STOR_REM, id);
+			}
+			/*Remove ID*/
+			disk_ID &= (~(STOR_IDOFFSET(id)));			
 		}
-		/*Remove ID*/
-		disk_ID &= (~(STOR_IDOFFSET(id)));
 		free(msg);
 	}else{
 		usbproxy_log(LL_NOTICE, "Unhandle Device %s [%s/%s] Event", 
