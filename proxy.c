@@ -19,7 +19,10 @@
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
-
+#ifdef HAVE_PPOLL
+#define _GNU_SOURCE
+#endif
+#include <poll.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -499,7 +502,11 @@ static void application_connection_setdown(struct app_client *client)
 	}
 	/*Set Conncetion Status to Dead*/
 	pthread_mutex_lock(&app_mutex);
-	client->connected =  APP_SHUTDOWN;
+	if(client->connected == APP_DEAD){
+		usbproxy_log(LL_ERROR, "Connection Have In Dead Status Socket %d", client->commufd);	
+	}else{
+		client->connected =  APP_SHUTDOWN;
+	}
 	socket_close(client->commufd);
 	pthread_mutex_unlock(&app_mutex);
 	usbproxy_log(LL_ERROR, "TearDown Socket %d", client->commufd);	
@@ -1217,9 +1224,11 @@ static int application_layer_loop()
 	int cnt, i;
 	struct fdlist pollfds;
 	struct timespec tspec;
-	
+
+#ifdef HAVE_PPOLL
 	sigset_t empty_sigset;
 	sigemptyset(&empty_sigset); // unmask all signals
+#endif
 
 	fdlist_create(&pollfds);
 	while(!should_exit){
@@ -1238,7 +1247,11 @@ static int application_layer_loop()
 		}
 		tspec.tv_sec = USBHOST_POLL_TIMER / 1000;
 		tspec.tv_nsec = (USBHOST_POLL_TIMER % 1000) * 1000000;
+	#ifdef HAVE_PPOLL
 		cnt = ppoll(pollfds.fds, pollfds.count, &tspec, &empty_sigset);
+	#else
+		cnt = poll(pollfds.fds, pollfds.count, &tspec);
+	#endif
 		usbproxy_log(LL_FLOOD, "poll() returned %d", cnt);
 		if(cnt == -1) {
 			if(errno == EINTR) {

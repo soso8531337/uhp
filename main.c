@@ -170,8 +170,10 @@ static int main_loop(int listenfd)
 	struct fdlist pollfds;
 	struct timespec tspec;
 
+#ifdef HAVE_PPOLL
 	sigset_t empty_sigset;
 	sigemptyset(&empty_sigset); // unmask all signals
+#endif
 
 	fdlist_create(&pollfds);
 	while(!should_exit) {
@@ -191,7 +193,12 @@ static int main_loop(int listenfd)
 
 		tspec.tv_sec = to / 1000;
 		tspec.tv_nsec = (to % 1000) * 1000000;
+		
+	#ifdef HAVE_PPOLL
 		cnt = ppoll(pollfds.fds, pollfds.count, &tspec, &empty_sigset);
+	#else
+		cnt = poll(pollfds.fds, pollfds.count, &tspec);
+	#endif
 		usbmuxd_log(LL_FLOOD, "poll() returned %d", cnt);
 		if(cnt == -1) {
 			if(errno == EINTR) {

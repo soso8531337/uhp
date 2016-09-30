@@ -2,7 +2,7 @@ CC=mipsel-openwrt-linux-gcc
 CFLAGS=-g -Wall 
 
 USB_DIR=/home/zhangwei/exercise/linux_c/vstfun/aoa/usb
-CFLAGS += -I$(USB_DIR)/include -D_FILE_OFFSET_BITS=64
+CFLAGS += -I$(USB_DIR)/include -D_FILE_OFFSET_BITS=64 -DHAVE_PPOLL
 LDFLAGS+= -L$(USB_DIR)/lib -lusb-1.0 -lpthread
 
 obj:=$(patsubst %.c, %.o, $(wildcard *.c))
