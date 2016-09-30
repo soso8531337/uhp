@@ -73,8 +73,9 @@
 
 //#define USBHOST_PORT		8080
 #define USBHOST_PORT		5555
-
-#define USBHOST_NBUF_SIZE		262144
+/*Application send/receive buffer 256KB+512Byte, 
+iPhone Send 256KB, 512Byte use for protocol header*/
+#define USBHOST_NBUF_SIZE		(262144+512)
 #define USBHOST_POLL_TIMER		(1*1000) /*1s*/
 #define USBHOST_STORAGE			64
 #define STOR_PAYLOAD		1
@@ -484,7 +485,6 @@ static int storage_operation_result(struct scsi_head *scsi, struct app_client *c
 	}
 	memcpy(client->ob_buf+client->ob_size, (void*)scsi, SCSI_HEAD_SIZE);
 	client->ob_size += SCSI_HEAD_SIZE;
-	client->events |= POLLOUT;
 	return 0;
 }
 static int usbhost_get_tag(void)
@@ -933,7 +933,7 @@ static void *device_monitor(void* arg)
 static void update_app_connection(struct app_client*conn)
 {
 	if(conn->ob_size &&
-			conn->ob_size < conn->ob_capacity)
+			conn->ob_size <= conn->ob_capacity)
 		conn->events |= POLLOUT;
 	else
 		conn->events &= ~POLLOUT;
@@ -943,9 +943,8 @@ static void update_app_connection(struct app_client*conn)
 	else
 		conn->events &= ~POLLIN;
 
-	usbproxy_log(LL_SPEW, "update_connection: events %d", conn->events);
+	usbproxy_log(LL_SPEW, "Applicaion Update connection: events %d", conn->events);
 }
-
 static int protocol_decode(struct app_client *client, struct scsi_head *scsi)
 {
 	struct scsi_head *shder = NULL;
@@ -975,9 +974,9 @@ static int protocol_decode(struct app_client *client, struct scsi_head *scsi)
 			usbproxy_log(LL_ERROR, "READ Too Big Package %u/%uBytes", 
 					payload, client->ob_capacity);
 			return PRO_BADPACKAGE;
-		}else if(payload > (client->ob_capacity-client->ib_size)){
+		}else if(payload > (client->ob_capacity-client->ob_size)){
 			usbproxy_log(LL_ERROR, "READ Buffer is Not Enough %u/%uBytes", 
-					payload, client->ob_capacity-client->ib_size);
+					payload, client->ob_capacity-client->ob_size);
 			return PRO_NOSPACE;
 		}
 	}
@@ -986,6 +985,14 @@ static int protocol_decode(struct app_client *client, struct scsi_head *scsi)
 	return PRO_OK;
 }
 
+static void application_update_event(void)
+{
+	pthread_mutex_lock(&app_mutex);
+	FOREACH(struct app_client *lc, app_proxy.device) {
+		update_app_connection(lc);
+	} ENDFOREACH
+	pthread_mutex_unlock(&app_mutex);
+}
 static int application_command(struct app_client *client)
 {
 	uint32_t bytes = 0;
@@ -1007,6 +1014,12 @@ static int application_command(struct app_client *client)
 	}else if(res == PRO_INCOMPLTE){
 		/*Recevie Not Finish*/
 		client->events |= POLLIN;
+		if(client->ob_size &&
+			client->ob_size <= client->ob_capacity){
+			client->events |= POLLOUT;
+		}else{
+			client->events &= ~POLLOUT;
+		}
 		return 0;
 	}else if(res == PRO_NOSPACE){
 		/*Out Buffer Not Enough to read*/
@@ -1022,8 +1035,6 @@ static int application_command(struct app_client *client)
 				scsi.relag = EREAD;
 				scsi.head = SCSI_DEVICE_MAGIC;
 				storage_operation_result(&scsi, client);				
-			}else if(res > 0){
-				client->events |= POLLOUT;
 			}			
 			break;
 		case SCSI_WRITE:
@@ -1032,9 +1043,6 @@ static int application_command(struct app_client *client)
 				/*Send to peer notify write failed*/
 				scsi.relag = EWRITE;
 				scsi.head = SCSI_DEVICE_MAGIC;
-			}else if(res > 0){
-				/*Write Finish*/		
-				client->events |= POLLIN;
 			}			
 			bytes = scsi.len;
 			storage_operation_result(&scsi, client);
@@ -1051,8 +1059,6 @@ static int application_command(struct app_client *client)
 				scsi.relag = EDISKLEN;
 				scsi.head = SCSI_DEVICE_MAGIC;
 				storage_operation_result(&scsi, client);				
-			}else{
-				client->events |= POLLOUT;
 			}
 			break;
 		case SCSI_INQUIRY:
@@ -1062,8 +1068,6 @@ static int application_command(struct app_client *client)
 				scsi.relag = EDISKINFO;
 				scsi.head = SCSI_DEVICE_MAGIC;
 				storage_operation_result(&scsi, client);				
-			}else{
-				client->events |= POLLOUT;
 			}
 			break;
 		default:
@@ -1076,6 +1080,12 @@ static int application_command(struct app_client *client)
 			 scsi.wtag, scsi.ctrid, scsi.addr, scsi.len, scsi.wlun, bytes, client->ib_size);	
 	memmove(client->ib_buf, client->ib_buf + bytes, client->ib_size);	
 	/*Encode Buffer and Send To peer*/
+	if(client->ib_size >= SCSI_HEAD_SIZE){
+		usbproxy_log(LL_ERROR, "Application Continue To Handle[%u/%uBytes]", client->ib_size, client->ib_capacity);
+		return 1;
+	}
+	/*Update Event flag*/
+	update_app_connection(client);
 	return 0;
 }
 
@@ -1085,8 +1095,12 @@ static void application_process_recv(struct app_client *client)
 
 	if(client->ib_size >= client->ib_capacity){
 		usbproxy_log(LL_ERROR, "Receive Buffer is Full [%uBytes]", client->ib_capacity);
-		client->events &= ~POLLIN;
-		return;
+		while((res = application_command(client)) == 1);
+		/*Try to handle buffer, if it is not effect, set down*/
+		if(res == -1 || client->ib_size >= client->ib_capacity){
+			application_connection_setdown(client);
+			return;
+		}	
 	}
 	res = recv(client->commufd, client->ib_buf + client->ib_size, client->ib_capacity - client->ib_size, 0);
 	if(res <= 0) {
@@ -1099,12 +1113,11 @@ static void application_process_recv(struct app_client *client)
 		return;
 	}
 	client->ib_size += res;
-	res = application_command(client);
+	while((res = application_command(client)) == 1);
 	if(res == -1){
 	#ifdef RELEASE
 		application_connection_setdown(client);
 	#else
-	
 		int copy_size, free_size;
 		free_size = client->ob_capacity-client->ob_size;
 		copy_size = client->ib_size> free_size?free_size:client->ib_size;
@@ -1141,6 +1154,7 @@ static void application_process_send(struct app_client *client)
 		application_connection_setdown(client);
 		return;
 	}
+	usbproxy_log(LL_ERROR, "Send buffer Used Size Change: %uBytes---->%uBytes", client->ob_size, client->ob_size-res);
 	if((uint32_t)res == client->ob_size) {
 		client->ob_size = 0;
 		client->events &= ~POLLOUT;
@@ -1177,7 +1191,8 @@ static void application_layer_process(int fd, short events)
 
 	if(events & POLLIN) {
 		application_process_recv(client);
-	} else if(events & POLLOUT) { //not both in case client died as part of process_recv
+	}
+	if(events & POLLOUT) { //not both in case client died as part of process_recv
 		application_process_send(client);
 	}
 }
@@ -1262,6 +1277,7 @@ static int application_layer_loop()
 			}
 		} else if(cnt == 0) {
 			usbhost_device_shutdown(0);
+			application_update_event();
 		} else {
 			for(i=0; i<pollfds.count; i++) {
 				if(pollfds.fds[i].revents && pollfds.owners[i] == FD_USB){
