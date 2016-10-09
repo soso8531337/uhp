@@ -1265,7 +1265,7 @@ static int application_layer_loop()
 	#ifdef HAVE_PPOLL
 		cnt = ppoll(pollfds.fds, pollfds.count, &tspec, &empty_sigset);
 	#else
-		cnt = poll(pollfds.fds, pollfds.count, &tspec);
+		cnt = poll(pollfds.fds, pollfds.count, USBHOST_POLL_TIMER);
 	#endif
 		usbproxy_log(LL_FLOOD, "poll() returned %d", cnt);
 		if(cnt == -1) {
