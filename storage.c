@@ -410,12 +410,16 @@ void storage_init(void)
 			usbproxy_log(LL_ERROR, "Udev Event Decode Error[%s]", uevent);
 			continue;
 		}
+	#ifdef MULTI_USB_SUPPORT		
 		if(msg->devpath && strstr(msg->devpath, SYS_BLK_SD)){
 			/*SD Card*/
 			diskid = disk_sdid_get();
 		}else{
 			diskid = disk_usbid_get();
 		}
+	#else
+		diskid = disk_sdid_get();
+	#endif
 		if(diskid < 0){
 			usbproxy_log(LL_FLOOD, "To Much Storage In List [%s]", msg->devtype);
 			free(msg);
@@ -463,7 +467,7 @@ int storage_action_handle(int sockfd, stor_callback callback)
 	char buffer[UEVENT_BUFFER_SIZE*2] = {0};
 	struct udevd_uevent_msg *msg;
 	int bufpos; 
-	unsigned char diskid = 0;
+	int diskid = 0;
 	ssize_t size;
 	char *pos = NULL;
 
@@ -515,12 +519,16 @@ int storage_action_handle(int sockfd, stor_callback callback)
 		char devbuf[128] = {0};
 		int fd = -1;
 		/*Disk ID*/
+	#ifdef MULTI_USB_SUPPORT		
 		if(msg->devpath && strstr(msg->devpath, SYS_BLK_SD)){
 			/*SD Card*/
 			diskid = disk_sdid_get();
 		}else{
 			diskid = disk_usbid_get();
 		}
+	#else
+		diskid = disk_sdid_get();
+	#endif
 		if(diskid < 0){
 			usbproxy_log(LL_FLOOD, "To Much Storage In List [%s]", msg->devtype);
 			free(msg);
