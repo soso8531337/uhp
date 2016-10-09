@@ -46,6 +46,8 @@ int next_device_id;
 #define CONN_OUTBUF_SIZE	65536
 
 #define ACK_TIMEOUT 30
+/*Becareful aoa receive windows size is equal USBHOST_NBUF_SIZE*/
+#define AOA_RX_WIN			(262144+512)
 
 enum mux_protocol {
 	MUX_PROTO_VERSION = 0,
@@ -377,8 +379,8 @@ int device_start_connect(int device_id, uint16_t dport, struct mux_client *clien
 	conn->ib_size = 0;
 
 	if(dev->usbdev->type == USB_ANDROID){
-		/*set rx_win to 131072, android dose not have rx ack*/
-		conn->rx_win = 131072;
+		/*set rx_win to AOA_RX_WIN, android dose not have rx ack*/
+		conn->rx_win = AOA_RX_WIN;
 		conn->sport = AOA_TCP_PORT;
 		conn->dport = AOA_TCP_PORT;		
 		conn->max_payload = USB_MTU;
