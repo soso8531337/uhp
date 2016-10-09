@@ -80,7 +80,7 @@ struct udevd_uevent_msg {
 static struct collection storage_list;
 unsigned char disk_ID = 0;
 
-static unsigned char  disk_sdid_get(void)
+static int disk_sdid_get(void)
 {
 	if(!(disk_ID & 
 		STOR_IDOFFSET(MERGE_(STOR_SD, 0)))){		
