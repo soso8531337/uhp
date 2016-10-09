@@ -153,7 +153,11 @@ static void set_signal_handlers(void)
 	sigaddset(&set, SIGTERM);
 	sigaddset(&set, SIGUSR1);
 	sigaddset(&set, SIGUSR2);
-	sigprocmask(SIG_SETMASK, &set, NULL);
+	/*We need used pthread_sigmask 
+	The function shall be equivalent to sigprocmask(), without the restriction that the call be made in a
+      	 single-threaded process.*/
+	//sigprocmask(SIG_SETMASK, &set, NULL);
+	pthread_sigmask(SIG_SETMASK, &set, NULL);
 	
 	memset(&sa, 0, sizeof(struct sigaction));
 	sa.sa_handler = handle_signal;
@@ -197,7 +201,7 @@ static int main_loop(int listenfd)
 	#ifdef HAVE_PPOLL
 		cnt = ppoll(pollfds.fds, pollfds.count, &tspec, &empty_sigset);
 	#else
-		cnt = poll(pollfds.fds, pollfds.count, &tspec);
+		cnt = poll(pollfds.fds, pollfds.count, to);
 	#endif
 		usbmuxd_log(LL_FLOOD, "poll() returned %d", cnt);
 		if(cnt == -1) {
