@@ -30,6 +30,7 @@
 #include <stdarg.h>
 #include <time.h>
 #include <sys/time.h>
+#include <signal.h>
 #ifdef __APPLE__
 #include <mach/mach_time.h>
 #endif
