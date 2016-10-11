@@ -77,7 +77,7 @@ struct accessory_t {
 static struct accessory_t acc_default = {
 	.manufacturer = "i4season",
 	.model = "U-Storage",
-	.description = "Android/IOS Storage Project",
+	.description = "U-Storage",
 	.version = "1.0",
 	.url = "https://www.simicloud.com/download/index.html",
 	.serial = "0000000012345678",
