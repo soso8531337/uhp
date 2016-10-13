@@ -38,6 +38,7 @@
 #define STOR_DEVTYPE			"disk"
 #define STOR_STR_ADD			"add"
 #define STOR_STR_REM			"remove"
+#define STOR_STR_CHANGE		"change"
 #define STOR_ID_MAX				8
 //#define SYS_BLK_SD		"usb1/1-1/1-1.1"
 #define SYS_BLK_SD 		"mtk-sd.0"
@@ -568,9 +569,58 @@ int storage_action_handle(int sockfd, stor_callback callback)
 			disk_ID &= (~(STOR_IDOFFSET(id)));			
 		}
 		free(msg);
+	}else if(!strcasecmp(msg->action, STOR_STR_CHANGE)){		
+		char devbuf[128] = {0};		
+		int fd = -1;		
+		unsigned char id =0;
+		
+		usbproxy_log(LL_NOTICE, "Try To Handle Device %s [%s/%s] Event", 
+				msg->action, msg->devname,  msg->devpath);
+		sprintf(devbuf, "/dev/%s", msg->devname);
+		if(access(devbuf, F_OK)){
+			mknod(devbuf, S_IFBLK|0644, msg->devt);
+		}
+		/*Check dev can open*/
+		if((fd = open(devbuf, O_RDONLY)) < 0){
+			/*Remove ID*/
+			usbproxy_log(LL_ERROR, "We Think it may be Remove action[%s]", msg->devname);
+			if(storlist_remove(msg, &id) == 0){
+				if(callback){
+					callback(STOR_REM, id);
+				}
+				/*Remove ID*/
+				disk_ID &= (~(STOR_IDOFFSET(id)));			
+			}			
+			free(msg);
+		}else{
+			close(fd);			
+			usbproxy_log(LL_ERROR, "We Think it may be Add action[%s]", msg->devname);
+	#ifdef MULTI_USB_SUPPORT		
+			if(msg->devpath && strstr(msg->devpath, SYS_BLK_SD)){
+				/*SD Card*/
+				diskid = disk_sdid_get();
+			}else{
+				diskid = disk_usbid_get();
+			}
+	#else
+			diskid = disk_sdid_get();
+	#endif
+			if(diskid < 0){
+				usbproxy_log(LL_FLOOD, "To Much Storage In List [%s]", msg->devtype);
+				free(msg);
+				return 0;
+			}
+			/*Add it to list*/
+			msg->id = diskid;
+			if(storlist_insert(msg) == 0 && callback){
+				callback(STOR_ADD, diskid);
+			}
+			usbproxy_log(LL_NOTICE, "ADD Device %d [%s/%s] To Storage List", 
+					msg->id, msg->devname,	msg->devpath);		
+		}		
 	}else{
-		usbproxy_log(LL_NOTICE, "Unhandle Device %s [%s/%s] Event", 
-				msg->action, msg->devname,  msg->devpath);	
+		usbproxy_log(LL_NOTICE, "Unhandle Device %s [%s/%s] Event",
+				msg->action, msg->devname,	msg->devpath);
 		free(msg);
 	}
 

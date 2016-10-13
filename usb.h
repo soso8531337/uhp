@@ -58,7 +58,7 @@
 #define AOA_AUDIO_ADB_PID		0x2D03	/* audio + adb */
 #define AOA_ACCESSORY_AUDIO_PID		0x2D04	/* accessory + audio */
 #define AOA_ACCESSORY_AUDIO_ADB_PID	0x2D05	/* accessory + audio + adb */
-#define INTERFACE_CLASS_AOA 255
+#define INTERFACE_CLASS_AOA 255 // Referrance http://www.usb.org/developers/defined_class/#BaseClassFFh
 #define INTERFACE_SUBCLASS_AOA 255
 /* Android Open Accessory protocol defines */
 #define AOA_GET_PROTOCOL		51

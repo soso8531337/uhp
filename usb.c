@@ -419,8 +419,8 @@ static int usb_switch_aoa(libusb_device* dev)
 	
 	for(j=0; j<config->bNumInterfaces; j++) {
 		const struct libusb_interface_descriptor *intf = &config->interface[j].altsetting[0];
-		if(intf->bInterfaceClass != INTERFACE_CLASS_AOA||
-			   intf->bInterfaceSubClass != INTERFACE_SUBCLASS_AOA){
+		/*We Just limit InterfaceClass, limit InterfaceSubClass may be lost sanxing huawei device*/
+		if(intf->bInterfaceClass != INTERFACE_CLASS_AOA){
 			continue;
 		}
 		/* Now asking if device supports Android Open Accessory protocol */
