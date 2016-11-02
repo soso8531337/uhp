@@ -487,6 +487,117 @@ static int storage_operation_result(struct scsi_head *scsi, struct app_client *c
 	client->ob_size += SCSI_HEAD_SIZE;
 	return 0;
 }
+
+static int system_chkup_firmware(char *firmware)
+{
+	char md5str[33] = {0}, buffer[512] = {0}, md5cmp[33] = {0};
+	char *ptr = NULL;
+	int fd, count=10, i;
+
+	if(!firmware){
+		return -1;
+	}
+#define MD5_FLAG			"MD5="	
+	if(compute_md5(firmware, md5str) < 0){
+		usbproxy_log(LL_WARNING, "Compute MD5:%s Failed", firmware);
+		return -1;
+	}
+	/*Check md5 value in firmware*/
+	fd = open(firmware, O_RDONLY);
+	if(fd < 0){
+		usbproxy_log(LL_WARNING, "Open:%s Failed", firmware);
+		return -1;
+	}
+	for(i=0; i < count; i++){
+		memset(buffer, 0, sizeof(buffer));
+		if(read(fd, buffer, sizeof(buffer)-1) <= 0){
+			usbproxy_log(LL_WARNING, "Read:%s Failed", firmware);
+			close(fd);
+			return -1;
+		}
+		if(strncmp(buffer, MD5_FLAG, strlen(MD5_FLAG)) == 0){
+			usbproxy_log(LL_WARNING, "Found MD5 String:%s", buffer);
+			break;
+		}
+	}
+	close(fd);
+	
+	if(i == count){
+		usbproxy_log(LL_WARNING, "No Found MD5 String:%s", firmware);
+		return -1;
+	}
+	i = 0;
+	ptr = buffer + strlen(MD5_FLAG);
+	while(*ptr != '\n' && i < sizeof(md5cmp)){
+		md5cmp[i] = *ptr;
+		ptr++;
+		i++;
+	}
+	if(strcasecmp(md5str, md5cmp)){
+		usbproxy_log(LL_WARNING, "MD5 String Not Same:%s<-->%s", md5str, md5cmp);
+		return -1;
+	}
+	usbproxy_log(LL_WARNING, "Firmware OK MD5 String Same:%s<-->%s", md5str, md5cmp);
+
+	return 0;
+}
+
+static int system_upfirmware(struct scsi_head *scsi, struct app_client *client)
+{
+#define USTORAGE_UPPATH			"/tmp/u-storage.firmware"
+	static int fd = -1;
+
+	if(!scsi || !client){
+		return -1;
+	}
+	if(scsi->ctrid == SCSI_UPDATE_START){
+		usbproxy_log(LL_WARNING, "Prepare To update Firmware");		
+		close(fd);
+		fd = open(USTORAGE_UPPATH, 
+				O_CREAT|O_WRONLY|O_TRUNC, S_IRUSR|S_IWUSR);
+		if(fd < 0){
+			usbproxy_log(LL_WARNING, "Open %s Failed:%s", 
+					USTORAGE_UPPATH, strerror(errno));
+			return -1;
+		}
+		usbproxy_log(LL_WARNING, "Open %s Successful:%d", 
+				USTORAGE_UPPATH, fd);
+		return 0;
+	}else if(scsi->ctrid == SCSI_UPDATE_DATA){
+		unsigned char *payload = client->ib_buf+SCSI_HEAD_SIZE;
+		int wlen = scsi->len, res, already = 0;
+		if(fd < 0){
+			usbproxy_log(LL_WARNING, "%s Not Open", USTORAGE_UPPATH);
+			return -1;
+		}
+		do {
+			res  = write(fd, payload + already, wlen - already);
+			if (res < 0) {
+				if(errno ==  EINTR ||
+						errno ==  EAGAIN){
+					continue;
+				}
+				usbproxy_log(LL_ERROR, "Write Firmware %s Error:%s", 
+						USTORAGE_UPPATH, strerror(errno));
+				close(fd);
+				return -1;
+			}
+			already += res;
+		} while (already < wlen);
+		usbproxy_log(LL_ERROR, "Write Firmware %s Successful:%d", 
+						USTORAGE_UPPATH, wlen);
+	}else if(scsi->ctrid == SCSI_UPDATE_END){
+		close(fd);
+		fd = -1;
+		usbproxy_log(LL_WARNING, "Check %s MD5", USTORAGE_UPPATH);
+		return system_chkup_firmware(USTORAGE_UPPATH);
+	}else{
+		usbproxy_log(LL_WARNING, "unknown Comannd ID:%d", scsi->ctrid);
+		return -1;
+	}
+
+	return 0;
+}
 static int usbhost_get_tag(void)
 {
 	if(use_tag == 0x7FFFFFFF){
@@ -1033,7 +1144,6 @@ static int application_command(struct app_client *client)
 			if(res < 0){
 				/*Send to peer notify read failed*/
 				scsi.relag = EREAD;
-				scsi.head = SCSI_DEVICE_MAGIC;
 				storage_operation_result(&scsi, client);				
 			}			
 			break;
@@ -1042,7 +1152,6 @@ static int application_command(struct app_client *client)
 			if(res < 0){
 				/*Send to peer notify write failed*/
 				scsi.relag = EWRITE;
-				scsi.head = SCSI_DEVICE_MAGIC;
 			}			
 			bytes = scsi.len;
 			storage_operation_result(&scsi, client);
@@ -1057,7 +1166,6 @@ static int application_command(struct app_client *client)
 			if(res < 0){
 				/*Send to peer notify read failed*/
 				scsi.relag = EDISKLEN;
-				scsi.head = SCSI_DEVICE_MAGIC;
 				storage_operation_result(&scsi, client);				
 			}
 			break;
@@ -1066,8 +1174,20 @@ static int application_command(struct app_client *client)
 			if(res < 0){
 				/*Send to peer notify read failed*/
 				scsi.relag = EDISKINFO;
-				scsi.head = SCSI_DEVICE_MAGIC;
 				storage_operation_result(&scsi, client);				
+			}
+			break;
+		case SCSI_UPDATE_START:
+		case SCSI_UPDATE_DATA:
+		case SCSI_UPDATE_END:		
+			res = system_upfirmware(&scsi, client);
+			if(res < 0){
+				/*Send to peer notify read failed*/
+				scsi.relag = EUPDATE;
+				storage_operation_result(&scsi, client);				
+			}
+			if(scsi.ctrid == SCSI_UPDATE_DATA){
+				bytes = scsi.len;
 			}
 			break;
 		default:

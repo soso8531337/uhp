@@ -31,6 +31,12 @@
 #include <time.h>
 #include <sys/time.h>
 #include <signal.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <unistd.h>
+
 #ifdef __APPLE__
 #include <mach/mach_time.h>
 #endif
@@ -38,6 +44,7 @@
 #include "utils.h"
 
 #include "log.h"
+#include "md5.h"
 #define util_error(...) usbmuxd_log(LL_ERROR, __VA_ARGS__)
 
 void fdlist_create(struct fdlist *list)
@@ -323,4 +330,45 @@ int ppoll(struct pollfd *fds, nfds_t nfds, const struct timespec *timeout, const
 	return ready;
 }
 #endif
+
+int compute_md5(char *filename, char *md5buf)
+{
+	MD5_CTX c;
+	int fd, i;
+	char tmp[33] = {0};
+	unsigned char decrypt[16];	
+	unsigned char buf[1024*16];
+
+	if(!filename){
+		return -1;
+	}	
+	fd = open(filename, O_RDONLY);
+	if(fd < 0){
+		usbmuxd_log(LL_ERROR, "ERROR: couldn't open %s", filename);
+		return -1;
+	}
+	MD5Init(&c);
+	for (;;){
+		i=read(fd,buf,1024*16);
+		if (i < 0) {
+			usbmuxd_log(LL_ERROR,"Read error.errmsg: %s", strerror(errno));
+			close(fd);
+			return -1; 
+		}else if ( i == 0 ){
+			break;
+		}
+		MD5Update(&c,buf,(unsigned long)i);
+	}
+	MD5Final(&c, decrypt);
+	close(fd);
+	usbmuxd_log(LL_ERROR,"%s MD5:", filename);
+	for(i=0;i<16;i++){		
+		printf("%02x",decrypt[i]);
+		sprintf(&(tmp[i*2]),"%02x",decrypt[i]);
+	}
+	printf("\n");
+	memcpy(md5buf, tmp, strlen(tmp));
+	
+	return 0;
+}
 

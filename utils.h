@@ -84,5 +84,6 @@ enum plist_format_t {
 
 uint64_t mstime64(void);
 void get_tick_count(struct timeval * tv);
+int compute_md5(char *filename, char *md5buf);
 
 #endif
