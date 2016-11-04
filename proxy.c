@@ -492,7 +492,8 @@ static int system_chkup_firmware(char *firmware)
 {
 	char md5str[33] = {0}, buffer[512] = {0}, md5cmp[33] = {0};
 	char *ptr = NULL;
-	int fd, count=10, i;
+	int count=10, i;
+	FILE *fp;
 
 	if(!firmware){
 		return -1;
@@ -503,16 +504,16 @@ static int system_chkup_firmware(char *firmware)
 		return -1;
 	}
 	/*Check md5 value in firmware*/
-	fd = open(firmware, O_RDONLY);
-	if(fd < 0){
-		usbproxy_log(LL_WARNING, "Open:%s Failed", firmware);
+	fp = fopen(firmware, "r");
+	if(!fp){
+		usbproxy_log(LL_WARNING, "FOpen:%s Failed", firmware);
 		return -1;
 	}
 	for(i=0; i < count; i++){
 		memset(buffer, 0, sizeof(buffer));
-		if(read(fd, buffer, sizeof(buffer)-1) <= 0){
+		if(fgets(buffer, sizeof(buffer)-1, fp) <= 0){
 			usbproxy_log(LL_WARNING, "Read:%s Failed", firmware);
-			close(fd);
+			fclose(fp);
 			return -1;
 		}
 		if(strncmp(buffer, MD5_FLAG, strlen(MD5_FLAG)) == 0){
@@ -520,7 +521,7 @@ static int system_chkup_firmware(char *firmware)
 			break;
 		}
 	}
-	close(fd);
+	fclose(fp);
 	
 	if(i == count){
 		usbproxy_log(LL_WARNING, "No Found MD5 String:%s", firmware);
@@ -595,6 +596,35 @@ static int system_upfirmware(struct scsi_head *scsi, struct app_client *client)
 		usbproxy_log(LL_WARNING, "unknown Comannd ID:%d", scsi->ctrid);
 		return -1;
 	}
+
+	return 0;
+}
+
+static int system_getfirmware_info(struct scsi_head *scsi, struct app_client *client)
+{
+	struct scsi_firmware_info dinfo;
+	int flen = sizeof(struct scsi_firmware_info);
+
+	if(!scsi || !client){
+		return -1;
+	}
+
+	if(scsi->len !=  flen){
+		usbproxy_log(LL_ERROR, " Firmware scsi_firmware_info mismatch[%d/%d]", 
+				scsi->len, flen);
+		return -1;
+	}	
+
+	memset(&dinfo, 0, flen);
+	/*Get Firmware Info*/
+
+	
+	memcpy(client->ob_buf+client->ob_size, scsi, SCSI_HEAD_SIZE);
+	client->ob_size += SCSI_HEAD_SIZE;
+	memcpy(client->ob_buf+client->ob_size, &dinfo, flen);
+	client->ob_size += flen;
+	usbproxy_log(LL_DEBUG, "Firmware Info:\nVendor:%s\nProduct:%s\nVersion:%s\nSerical:%s\nLicense:%s", 
+					dinfo.vendor, dinfo.product, dinfo.version, dinfo.serial, dinfo.license);
 
 	return 0;
 }
@@ -1068,7 +1098,7 @@ static int protocol_decode(struct app_client *client, struct scsi_head *scsi)
 	if(shder->head != SCSI_PHONE_MAGIC){
 		usbproxy_log(LL_ERROR, "Magic Error[0x%x]", shder->head);
 		return PRO_BADMAGIC;
-	}else if(shder->ctrid == SCSI_WRITE){
+	}else if(shder->ctrid &SCSI_WFLAG){
 		payload = shder->len + SCSI_HEAD_SIZE;
 		if(payload > client->ib_capacity){
 			usbproxy_log(LL_ERROR, "WRITE Too Big Package %u/%uBytes", 
@@ -1189,6 +1219,10 @@ static int application_command(struct app_client *client)
 			if(scsi.ctrid == SCSI_UPDATE_DATA){
 				bytes = scsi.len;
 			}
+			storage_operation_result(&scsi, client);			
+			break;
+		case SCSI_FIRMWARE_INFO:
+			system_getfirmware_info(&scsi, client);
 			break;
 		default:
 			usbproxy_log(LL_ERROR, "Unhandle SCSI Type-->%d",  scsi.ctrid);
