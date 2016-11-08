@@ -633,7 +633,7 @@ static int system_getfirmware_info(struct scsi_head *scsi, struct app_client *cl
 	while (fgets(buffer, sizeof(buffer), fp)) {
 		memset(key, 0, sizeof(key));
 		memset(value, 0, sizeof(value));		
-		if (sscanf(buffer, "%s=%[^\n ]",
+		if (sscanf(buffer, "%[^=]=%[^\n ]",
 					key, value) != 2)
 			continue;
 		if(!strcasecmp(key, "VENDOR")){
