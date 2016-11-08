@@ -82,13 +82,14 @@ struct scsi_inquiry_info{
   char serial[32];
 }__attribute__((__packed__));
 
-struct scsi_firmware_info{
-  char vendor[32];
-  char product[ 32];
-  char version[ 32];
-  char serial[32];
-  char license[128];
-}__attribute__((__packed__));
-
+typedef struct acessory_parameter
+{
+	char manufacture[32];
+	char model_name[32];
+	char sn[32];
+	char fw_version[16];
+	char hw_version[16];	
+	char license[128];
+}__attribute__((__packed__))vs_acessory_parameter;
 
 #endif

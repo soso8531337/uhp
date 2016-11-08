@@ -491,6 +491,7 @@ static int storage_operation_result(struct scsi_head *scsi, struct app_client *c
 static int system_chkup_firmware(char *firmware)
 {
 	char md5str[33] = {0}, buffer[512] = {0}, md5cmp[33] = {0};
+	char syscmd[1024] = {0};
 	char *ptr = NULL;
 	int count=10, i;
 	FILE *fp;
@@ -498,8 +499,10 @@ static int system_chkup_firmware(char *firmware)
 	if(!firmware){
 		return -1;
 	}
-#define MD5_FLAG			"MD5="	
-	if(compute_md5(firmware, md5str) < 0){
+#define MD5_FLAG			"MD5="
+#define SYS_FIRM_SKIP		(64*1024) //skip 64KB
+#define SYS_FIRM_UPSCRIP		"/sbin/sysupgrade"
+	if(compute_md5(firmware, SYS_FIRM_SKIP, md5str) < 0){
 		usbproxy_log(LL_WARNING, "Compute MD5:%s Failed", firmware);
 		return -1;
 	}
@@ -539,7 +542,8 @@ static int system_chkup_firmware(char *firmware)
 		return -1;
 	}
 	usbproxy_log(LL_WARNING, "Firmware OK MD5 String Same:%s<-->%s", md5str, md5cmp);
-
+	snprintf(syscmd, sizeof(syscmd)-1, "%s %s &", SYS_FIRM_UPSCRIP, firmware);
+	system(syscmd);
 	return 0;
 }
 
@@ -602,9 +606,12 @@ static int system_upfirmware(struct scsi_head *scsi, struct app_client *client)
 
 static int system_getfirmware_info(struct scsi_head *scsi, struct app_client *client)
 {
-	struct scsi_firmware_info dinfo;
-	int flen = sizeof(struct scsi_firmware_info);
+	vs_acessory_parameter dinfo;
+	int flen = sizeof(vs_acessory_parameter);
+	FILE *fp;
+	char buffer[256] = {0}, key[128], value[128];
 
+#define SYS_FIRMCONF		"/etc/firmware"
 	if(!scsi || !client){
 		return -1;
 	}
@@ -617,14 +624,38 @@ static int system_getfirmware_info(struct scsi_head *scsi, struct app_client *cl
 
 	memset(&dinfo, 0, flen);
 	/*Get Firmware Info*/
-
+	fp = fopen(SYS_FIRMCONF, "r");
+	if(fp == NULL){
+		usbproxy_log(LL_ERROR, "Open %s Failed:%s", 
+						SYS_FIRMCONF, strerror(errno));
+		return -1;
+	}
+	while (fgets(buffer, sizeof(buffer), fp)) {
+		memset(key, 0, sizeof(key));
+		memset(value, 0, sizeof(value));		
+		if (sscanf(buffer, "%s=%[^\n ]",
+					key, value) != 2)
+			continue;
+		if(!strcasecmp(key, "VENDOR")){
+			strcpy(dinfo.manufacture, value);
+		}else if(!strcasecmp(key, "CURFILE")){
+			strcpy(dinfo.model_name, value);
+		}else if(!strcasecmp(key, "CURVER")){
+			strcpy(dinfo.fw_version, value);
+		}else if(!strcasecmp(key, "SN")){
+			strcpy(dinfo.sn, value);
+		}else if(!strcasecmp(key, "LICENSE")){
+			strcpy(dinfo.license, value);
+		}
+	}
+	fclose(fp);
 	
 	memcpy(client->ob_buf+client->ob_size, scsi, SCSI_HEAD_SIZE);
 	client->ob_size += SCSI_HEAD_SIZE;
 	memcpy(client->ob_buf+client->ob_size, &dinfo, flen);
 	client->ob_size += flen;
 	usbproxy_log(LL_DEBUG, "Firmware Info:\nVendor:%s\nProduct:%s\nVersion:%s\nSerical:%s\nLicense:%s", 
-					dinfo.vendor, dinfo.product, dinfo.version, dinfo.serial, dinfo.license);
+					dinfo.manufacture, dinfo.model_name, dinfo.fw_version, dinfo.sn, dinfo.license);
 
 	return 0;
 }

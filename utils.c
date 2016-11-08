@@ -331,7 +331,7 @@ int ppoll(struct pollfd *fds, nfds_t nfds, const struct timespec *timeout, const
 }
 #endif
 
-int compute_md5(char *filename, char *md5buf)
+int compute_md5(char *filename, off_t offset, char *md5buf)
 {
 	MD5_CTX c;
 	int fd, i;
@@ -347,6 +347,14 @@ int compute_md5(char *filename, char *md5buf)
 		usbmuxd_log(LL_ERROR, "ERROR: couldn't open %s", filename);
 		return -1;
 	}
+	if(offset &&
+			lseek(fd, offset, SEEK_SET) < 0){
+		usbmuxd_log(LL_ERROR, "ERROR: Lseek %s Error:%s", 
+				filename, strerror(errno));
+		close(fd);
+		return -1;
+	}
+	
 	MD5Init(&c);
 	for (;;){
 		i=read(fd,buf,1024*16);

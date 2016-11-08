@@ -758,6 +758,7 @@ static int usb_device_add(libusb_device* dev)
 		return -1;
 	}
 
+#if 0
 	if(usbdev->type == USB_IOS){
 		// Spin up NUM_RX_LOOPS parallel usb data retrieval loops
 		// Old usbmuxds used only 1 rx loop, but that leaves the
@@ -792,6 +793,32 @@ static int usb_device_add(libusb_device* dev)
 			return -1;
 		}
 	}
+#else
+	// Spin up NUM_RX_LOOPS parallel usb data retrieval loops
+	// Old usbmuxds used only 1 rx loop, but that leaves the
+	// USB port sleeping most of the time
+	int rx_loops = NUM_RX_LOOPS;
+	for (rx_loops = NUM_RX_LOOPS; rx_loops > 0; rx_loops--) {
+		if(start_rx_loop(usbdev) < 0) {
+			usbmuxd_log(LL_WARNING, "Failed to start RX loop number %d", NUM_RX_LOOPS - rx_loops);
+			break;
+		}
+	}
+	// Ensure we have at least 1 RX loop going
+	if (rx_loops == NUM_RX_LOOPS) {
+		usbmuxd_log(LL_FATAL, "Failed to start any RX loop for device %d-%d",
+					usbdev->bus, usbdev->address);
+		device_remove(usbdev);
+		usb_disconnect(usbdev);
+		return -1;
+	} else if (rx_loops > 0) {
+		usbmuxd_log(LL_WARNING, "Failed to start all %d RX loops. Going on with %d loops. "
+					"This may have negative impact on device read speed.",
+					NUM_RX_LOOPS, NUM_RX_LOOPS - rx_loops);
+	} else {
+		usbmuxd_log(LL_DEBUG, "All %d RX loops started successfully", NUM_RX_LOOPS);
+	}
+#endif
 
 	return 0;
 }
