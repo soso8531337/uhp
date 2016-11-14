@@ -67,10 +67,10 @@
 #include "proxy.h"
 #include "log.h"
 #include "storage.h"
-
+#include "preread.h"
 
 #define RELEASE 1
-
+#define SUPPORT_PREREAD 1
 //#define USBHOST_PORT		8080
 #define USBHOST_PORT		5555
 /*Application send/receive buffer 256KB+512Byte, 
@@ -355,6 +355,45 @@ static int storage_write(struct scsi_head *scsi,  unsigned char *payload)
 	return wlen;
 }
 
+#ifdef SUPPORT_PREREAD
+static int storage_read(struct scsi_head *scsi, struct app_client *client)
+{
+	int total = 0,  already = 0;
+	char *payload = NULL;
+
+	if(!scsi || !client){
+		return -1;
+	}
+	if(scsi->len == 0){
+		return -1;
+	}
+	usbproxy_log(LL_ERROR, "Read begin:wtag=%d\nctrid=%d\naddr=%d\nlen=%d\nwlun=%d",  
+			 scsi->wtag, scsi->ctrid, scsi->addr, scsi->len, scsi->wlun);	
+	total = scsi->len + SCSI_HEAD_SIZE;
+	payload = calloc(1, total);
+	if(payload == NULL){
+		usbproxy_log(LL_ERROR, "Calloc Memory Error:%s",  strerror(errno));
+		return -1;
+	}
+	/*copy header*/
+	memcpy(payload, scsi, sizeof(struct scsi_head));
+	already += SCSI_HEAD_SIZE;
+	
+	if(preread_storage_read(scsi->wlun, scsi->addr, 
+			scsi->len, payload+already) < 0){
+		free(payload);
+		return -1;
+	}
+	memcpy(client->ob_buf+client->ob_size, payload, total);
+	client->ob_size += total;
+
+	usbproxy_log(LL_ERROR, "Read Finish:wtag=%d\nctrid=%d\naddr=%d\nlen=%d\nwlun=%d",  
+			 scsi->wtag, scsi->ctrid, scsi->addr, scsi->len, scsi->wlun);
+	/*Free Memory*/ 
+	free(payload);
+	return total;
+}
+#else
 static int storage_read(struct scsi_head *scsi, struct app_client *client)
 {
 	int wlen, fd, already = 0, res, total = 0, paylen = 0;
@@ -422,6 +461,7 @@ static int storage_read(struct scsi_head *scsi, struct app_client *client)
 	free(payload);
 	return total;
 }
+#endif
 
 static int storage_disklun(struct scsi_head *scsi, struct app_client *client)
 {	
@@ -1542,6 +1582,8 @@ USBHOST_API void* usbhost_application_run(void *args)
 		usbproxy_log(LL_ERROR, "Start Subscribe Failed");
 		return NULL;
 	}
+	/*INIT ReadAhead*/
+	preread_storage_init();
 	/*Start Main Loop Handle application Task*/
 	application_layer_loop();
 

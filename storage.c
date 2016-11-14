@@ -53,17 +53,6 @@
 #define STOR_DFT_PRO		"U-Storage"
 #define STOR_DFT_VENDOR		"i4season"
 
-enum{
-	STOR_SD_0=0,
-	STOR_USB_1=1,
-	STOR_USB_2=2,
-	STOR_USB_3=3,
-	STOR_USB_4=4,
-	STOR_USB_5=5,
-	STOR_USB_6=6,
-	STOR_USB_7=7
-};
-
 struct udevd_uevent_msg {
 	unsigned char id;
 	char *action;
