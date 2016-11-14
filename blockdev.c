@@ -15,8 +15,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
-#include <locale.h>
-#include <libintl.h>
 
 #include "blockdev.h"
 #include "log.h"
