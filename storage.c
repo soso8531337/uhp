@@ -28,6 +28,7 @@
 #include "log.h"
 #include "storage.h"
 #include "protocol.h"
+#include "preread.h"
 
 #ifndef NETLINK_KOBJECT_UEVENT
 #define NETLINK_KOBJECT_UEVENT	15
@@ -539,6 +540,10 @@ int storage_action_handle(int sockfd, stor_callback callback)
 		}else{
 			close(fd);
 		}
+		/*preread*/
+	#ifdef SUPPORT_PREREAD
+		preread_plug_handle(diskid, devbuf, PRE_ADD);
+	#endif		
 		/*Add it to list*/
 		msg->id = diskid;
 		if(storlist_insert(msg) == 0 && callback){
@@ -554,6 +559,10 @@ int storage_action_handle(int sockfd, stor_callback callback)
 			if(callback){
 				callback(STOR_REM, id);
 			}
+			/*preread*/
+		#ifdef SUPPORT_PREREAD
+			preread_plug_handle(diskid, NULL, PRE_REMOVE);
+		#endif			
 			/*Remove ID*/
 			disk_ID &= (~(STOR_IDOFFSET(id)));			
 		}
@@ -577,6 +586,10 @@ int storage_action_handle(int sockfd, stor_callback callback)
 				if(callback){
 					callback(STOR_REM, id);
 				}
+				/*preread*/
+			#ifdef SUPPORT_PREREAD
+				preread_plug_handle(diskid, NULL, PRE_REMOVE);
+			#endif				
 				/*Remove ID*/
 				disk_ID &= (~(STOR_IDOFFSET(id)));			
 			}			
@@ -599,6 +612,10 @@ int storage_action_handle(int sockfd, stor_callback callback)
 				free(msg);
 				return 0;
 			}
+			/*preread*/
+		#ifdef SUPPORT_PREREAD
+			preread_plug_handle(diskid, devbuf, PRE_ADD);
+		#endif			
 			/*Add it to list*/
 			msg->id = diskid;
 			if(storlist_insert(msg) == 0 && callback){

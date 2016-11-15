@@ -21,12 +21,20 @@
 #ifndef PREREAD_H
 #define PREREAD_H
 
+#define SUPPORT_PREREAD 1
+
 #define PREBUFFER_FACTOR		2
 #define PREBUFFER_SIZE		(256*1024*PREBUFFER_FACTOR) //prebuffer size limit 256KB
+
+enum{
+	PRE_ADD=0,
+	PRE_REMOVE=1
+};
 
 int preread_storage_init(void);
 void preread_storage_destory(void);
 int preread_storage_read(int16_t wlun, off_t offset, int32_t size, char *payload);
+int preread_plug_handle(int16_t wlun, char *diskName, int action);
 
 
 #endif

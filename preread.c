@@ -212,6 +212,8 @@ static int preread_buffer_reinit(int wlun, char *diskName)
 	pRbuf->buffer.cacheSectorStart = 0;
 	/*Set Offset*/
 	pRbuf->offset = 0;
+	/*Set readahead*/
+	blockdev_readahead(diskName, PREBUFFER_SIZE/SCSI_SECTOR_SIZE);	
 	/*Set Value*/
 	pRead[diskNum] = pRbuf;
 
@@ -240,6 +242,10 @@ static int preread_buffer_readfrom_disk(int fd, off_t offset, char *payload, int
 			}
 			usbproxy_log(LL_ERROR, "Read %d Error:%s",fd, strerror(errno));
 			return -1;
+		}else if(res == 0){
+			usbproxy_log(LL_ERROR, "Read End OF File: offset=%lld readn=%d",
+						offset, already);
+			return already;
 		}
 		already += res;
 	} while (already < size);
@@ -283,9 +289,7 @@ static int preread_buffer_getcontent(preRead *pRbuf, preRequst *pReq)
 	int countSec, freeSize, offsetSize;
 	int freeCount;
 	
-	if(!pRbuf || 
-			!pReq ||
-				!pRbuf->buffer.cacheSize){
+	if(!pRbuf || !pReq){
 		return -1;
 	}
 
@@ -303,7 +307,8 @@ static int preread_buffer_getcontent(preRead *pRbuf, preRequst *pReq)
 	pRbuf->sizeLatestRequest = pReq->size;
 	pRbuf->countRequest++;
 	
-	if((startSec+countSec < pReq->offset) ||
+	if(!pRbuf->buffer.cacheSize || 
+			(startSec+countSec < pReq->offset) ||
 			(startSec > pReq->offset) ||
 				freeSize < pReq->size){
 		usbproxy_log(LL_WARNING, "Readahead Not Cache:wlen=%d offset=%lld size=%d", 
@@ -360,7 +365,7 @@ static int preread_buffer_getcontent(preRead *pRbuf, preRequst *pReq)
 static int preread_buffer_readaread(preRead *pRbuf)
 {
 	off_t offset;
-	int readSize;
+	int readSize, readokSize = 0;
 	
 	if(!pRbuf){
 		return -1;
@@ -378,14 +383,14 @@ static int preread_buffer_readaread(preRead *pRbuf)
 	pread_buffer_resetbuf(&(pRbuf->buffer));
 	pRbuf->buffer.cacheSectorStart = pRbuf->offsetLatestRequest+
 						pRbuf->sizeLatestRequest/SCSI_SECTOR_SIZE;
-	if(preread_buffer_readfrom_disk(pRbuf->diskfd, offset, 
-					pRbuf->buffer.buffPayload, readSize) < 0){
+	if((readokSize = preread_buffer_readfrom_disk(pRbuf->diskfd, offset, 
+					pRbuf->buffer.buffPayload, readSize)) < 0){
 		usbproxy_log(LL_ERROR, "ReadFrom Disk Error:%d:%dBytes", 
 						pRbuf->diskfd, readSize);		
 		pread_buffer_resetbuf(&(pRbuf->buffer));
 		return -1;
 	}
-	pRbuf->buffer.cacheSize = readSize;
+	pRbuf->buffer.cacheSize = readokSize;
 	usbproxy_log(LL_WARNING, "ReadFrom Disk Successful:");	
 	pread_buffer_printbuf(pRbuf);
 	
@@ -540,3 +545,79 @@ int preread_storage_read(int16_t wlun, off_t offset, int32_t size, char *payload
 	return 0;
 }
 
+int preread_plug_handle(int16_t wlun, char *diskName, int action)
+{
+	preRead *pRbuf = NULL;
+
+	if(action != PRE_ADD &&
+			action != PRE_REMOVE){
+		usbproxy_log(LL_WARNING, "PreRead Not Handle Event %d...", action);
+		return -1;
+	}
+	if(wlun > STOR_NUM-1){
+		usbproxy_log(LL_WARNING, "PreRead Not Handle To Much Disk %d...", wlun);
+		return -1;
+	}
+	
+	if(action == PRE_ADD){
+		if(pRead[wlun]){
+			usbproxy_log(LL_WARNING, "We need to Close Previous DiskInfo[%d]...", wlun);
+			close(pRead[wlun]->diskfd);
+			pRead[wlun]->diskfd = -1;
+			if(pRead[wlun]->buffer.buffBegin){				
+				usbproxy_log(LL_WARNING, "Free Previous PreBuffer Memory[%d]...", wlun);
+				free(pRead[wlun]->buffer.buffBegin);
+			}
+			free(pRead[wlun]);
+			pRead[wlun] = NULL;
+		}
+		usbproxy_log(LL_WARNING, "Preread Handle disk %d ADD Event[Calloc Memory]...", wlun);		
+		pRbuf = calloc(1, sizeof(preRead));
+		if(!pRbuf){
+			usbproxy_log(LL_WARNING, "Multi Disk Readahead[%d->%s] Error[%s]...", 
+					wlun, diskName, strerror(errno));
+			pRead[wlun] = NULL;			
+			return -1;
+		}
+		/*Set readahead*/
+		if(diskName){
+			blockdev_readahead(diskName, PREBUFFER_SIZE/SCSI_SECTOR_SIZE);		
+		}
+		/*Set Value*/
+		pRbuf->wlun = wlun;
+		pRbuf->diskfd = open(diskName, O_RDWR);
+		if(pRbuf->diskfd < 0){
+			usbproxy_log(LL_WARNING, "Multi Disk open[%d->%s] Error[%s]...", 
+					wlun, diskName, strerror(errno));
+			free(pRbuf);
+			pRead[wlun] = NULL;
+			return -1;
+		}
+		/*Init Prebuffer*/
+		if(preread_buffer_init(&(pRbuf->buffer), pRbuf->diskfd, 0) < 0){
+			usbproxy_log(LL_WARNING, "Multi Disk Init Buffer[%d->%s] Error[%s]...", 
+					wlun, diskName, strerror(errno));			
+			close(pRbuf->diskfd);
+			free(pRbuf);
+			pRead[wlun] = NULL;			
+			return -1;
+		}
+		/*Set Offset*/
+		pRbuf->offset += pRbuf->buffer.cacheSize;
+		/*Set Value*/
+		pRead[wlun] = pRbuf;
+		usbproxy_log(LL_WARNING, "Preread Handle disk %d ADD Event[Successful]...", wlun);		
+	}else if(action == PRE_REMOVE){
+		usbproxy_log(LL_WARNING, "Preread Handle disk %d Remove Event..", wlun);
+		/*We just close the fd, not free memory, because read thread may be reading disk*/
+		if(!pRead[wlun]){
+			usbproxy_log(LL_WARNING, "Preread Handle disk %d Remove Event[Finish Empty]..", wlun);
+			return 0;
+		}
+		close(pRead[wlun]->diskfd);
+		pRead[wlun]->diskfd = -1;
+		usbproxy_log(LL_WARNING, "Preread Handle disk %d Remove Event[Successful]..", wlun);		
+	}
+
+	return 0;
+}

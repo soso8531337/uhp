@@ -70,7 +70,6 @@
 #include "preread.h"
 
 #define RELEASE 1
-#define SUPPORT_PREREAD 1
 //#define USBHOST_PORT		8080
 #define USBHOST_PORT		5555
 /*Application send/receive buffer 256KB+512Byte, 
